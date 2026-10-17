@@ -22,7 +22,7 @@ from pathlib import Path
 import teleop
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from botswain.core.clock import now_ns
@@ -31,6 +31,42 @@ log = logging.getLogger(__name__)
 
 # FastAPI reads the endpoint annotations at runtime, so these imports must be module-level.
 CERT_DIR = Path(__file__).resolve().parents[2] / "assets" / "certs"
+
+
+# The package page's Start button does nothing at all when WebXR is missing or AR fails to start.
+# This makes every such failure visible on the phone.
+DIAGNOSE_JS = """<script>
+(function () {
+  function say(msg) { alert("Botswain: " + msg); }
+  window.addEventListener("unhandledrejection", function (e) {
+    say("AR could not start: " + (e.reason && (e.reason.message || e.reason)) +
+        ". Check Chrome is up to date and Google Play Services for AR is installed.");
+  });
+  document.addEventListener("click", function (e) {
+    if (!e.target || e.target.id !== "start-button") return;
+    if (!window.isSecureContext) { say("not a secure page: open the https:// address"); return; }
+    if (!navigator.xr) { say("this browser has no WebXR. Open the address in Google Chrome (not the built-in or an in-app browser)."); return; }
+    navigator.xr.isSessionSupported("immersive-ar").then(function (ok) {
+      if (!ok) say("this phone/browser cannot run WebXR AR. Install or update 'Google Play Services for AR' from the Play Store; the phone must be on Google's ARCore device list.");
+    });
+  }, true);
+})();
+</script>"""
+
+CHECK_PAGE = """<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
+<body style="font:16px sans-serif;padding:16px"><h3>Botswain phone check</h3><pre id=o>checking...</pre><script>
+var o = document.getElementById("o"), lines = [];
+lines.push("secure page (https): " + window.isSecureContext);
+lines.push("WebXR present: " + !!navigator.xr);
+lines.push("browser: " + navigator.userAgent);
+function done() { o.textContent = lines.join("
+"); }
+if (navigator.xr) navigator.xr.isSessionSupported("immersive-ar").then(function (ok) {
+  lines.push("immersive-ar supported: " + ok + (ok ? "  -> go back to / and press Start" :
+    "  -> install/update Google Play Services for AR, use Chrome")); done(); }, function (e) {
+  lines.push("immersive-ar check failed: " + e); done(); });
+else { lines.push("-> open this address in Google Chrome"); done(); }
+</script>"""
 
 
 @dataclass(frozen=True)
@@ -81,9 +117,15 @@ class PhoneServer:
         app = FastAPI()
         app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="assets")
 
+        page = (frontend / "index.html").read_text(encoding="utf-8").replace("</body>", DIAGNOSE_JS + "</body>", 1)
+
         @app.get("/")
-        async def index() -> FileResponse:
-            return FileResponse(frontend / "index.html")
+        async def index() -> HTMLResponse:
+            return HTMLResponse(page)
+
+        @app.get("/check")
+        async def check() -> HTMLResponse:
+            return HTMLResponse(CHECK_PAGE)
 
         @app.websocket("/ws")
         async def ws(websocket: WebSocket) -> None:

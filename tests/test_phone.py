@@ -68,7 +68,10 @@ def test_phone_page_served_over_https(server):
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
     with urllib.request.urlopen(f"https://127.0.0.1:{srv.port}/", context=ctx, timeout=3) as r:
-        assert r.status == 200 and b"<html" in r.read().lower()
+        body = r.read().lower()
+        assert r.status == 200 and b"<html" in body and b"botswain:" in body  # error reporter injected
+    with urllib.request.urlopen(f"https://127.0.0.1:{srv.port}/check", context=ctx, timeout=3) as r:
+        assert b"phone check" in r.read().lower()
 
 
 def test_server_stops_and_frees_the_port():

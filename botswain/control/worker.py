@@ -32,6 +32,7 @@ from botswain.core.types import (
     JogStep,
     JogTick,
     MoveTo,
+    Pose,
     RobotState,
     SetSpeed,
     Stop,
@@ -55,6 +56,19 @@ class CommandRecord:
     rule: str | None
 
 
+@dataclass(frozen=True)
+class Commanded:
+    """The last pose target we sent (after the gate), what came in before the gate, and the gripper command.
+
+    The recorder logs this next to the measured state, so a dataset holds commanded AND measured actions.
+    """
+
+    t_ns: int = 0
+    raw: Pose | None = None
+    sent: Pose | None = None
+    gripper_open: bool | None = None
+
+
 class RobotWorker:
     def __init__(self, driver: Driver, gate: SafetyGate, tick_s: float = 0.008, publish_hz: float = 30.0) -> None:
         self.driver = driver
@@ -65,6 +79,7 @@ class RobotWorker:
         self.on_log: Callable[[str, str], None] | None = None
         self.on_teleport: Callable[[], None] | None = None  # the input should re-anchor (teleop mapping)
         self.last_command: CommandRecord | None = None
+        self.commanded = Commanded()  # replaced as a whole, so readers on other threads see a consistent one
 
         self._queue: queue.SimpleQueue[Command] = queue.SimpleQueue()
         self._stop_requested = threading.Event()
@@ -195,6 +210,10 @@ class RobotWorker:
         self.last_command = CommandRecord(now, cmd, verdict.cmd, rules)
         if rules:
             self._log_rule(rules, "info", f"{name} clamped by {rules}")
+        if isinstance(cmd, MoveTo) and isinstance(cmd.target, Pose):
+            self.commanded = replace(self.commanded, t_ns=now, raw=cmd.target, sent=verdict.cmd.target)
+        elif isinstance(cmd, Gripper):
+            self.commanded = replace(self.commanded, gripper_open=cmd.open)
         self._execute(verdict.cmd)
 
     def _execute(self, cmd: Command) -> None:
@@ -296,6 +315,7 @@ class RobotWorker:
         self.last_command = CommandRecord(now, cmd, verdict.cmd, rules)
         if rules:
             self._log_rule(f"stream:{rules}", "info", f"stream clamped by {rules}")
+        self.commanded = replace(self.commanded, t_ns=now, raw=cmd.pose, sent=verdict.cmd.pose)
         if self._call("stream_target", self.driver.stream_target, verdict.cmd.pose):
             self._streaming = True
             self._last_stream_ns = now

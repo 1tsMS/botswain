@@ -63,6 +63,7 @@ class RobotWorker:
         self.publish_period_ns = int(1e9 / publish_hz)
         self.on_state: Callable[[RobotState], None] | None = None
         self.on_log: Callable[[str, str], None] | None = None
+        self.on_teleport: Callable[[], None] | None = None  # the input should re-anchor (teleop mapping)
         self.last_command: CommandRecord | None = None
 
         self._queue: queue.SimpleQueue[Command] = queue.SimpleQueue()
@@ -74,6 +75,12 @@ class RobotWorker:
         self._connected = False
         self._hold_tick_ns: int | None = None  # last "still held" time while a hold-jog runs, else None
         self._hold_cmd: JogHold | None = None
+        self.stream_period_ns = int(gate.period_s * 1e9)
+        self._stream_latest: StreamTarget | None = None  # newest teleop target, replaced by every new sample
+        self._stream_input_ns = 0  # arrival time of the newest sample
+        self._streaming = False
+        self._last_stream_ns = 0
+        self._stream_latched = False  # after STOP: no streaming until the operator releases hold-to-move
         self._next_publish_ns = 0
         self._last_rule_log_ns: dict[str, int] = {}
 
@@ -87,6 +94,11 @@ class RobotWorker:
             self.request_stop()
         else:
             self._queue.put(cmd)
+
+    def stream(self, cmd: StreamTarget) -> None:
+        """Teleop input (any thread). Not queued: only the newest target matters, one goes out per period."""
+        self._stream_input_ns = cmd.t_ns
+        self._stream_latest = cmd
 
     def request_stop(self) -> None:
         """STOP lane: jumps the queue, clears it, ends any jog or stream, calls driver.stop()."""
@@ -148,6 +160,7 @@ class RobotWorker:
             self._handle(cmd, state)
             state = self._read_state()  # the next command must see what this one changed
         self._watchdog(state)
+        self._stream_tick(state)
         self._publish(state)
 
     def _handle_stop(self) -> None:
@@ -160,6 +173,9 @@ class RobotWorker:
             except queue.Empty:
                 break
         self._hold_tick_ns = None
+        if self._streaming or self._stream_latest is not None:
+            self._stream_latched = True  # the phone keeps sending hold=true; don't restart on the next sample
+        self._end_stream()
         self._call("stop", self.driver.stop)
         self._log("warn", f"STOP ({dropped} queued command(s) dropped)")
 
@@ -215,8 +231,8 @@ class RobotWorker:
                     self._call("jog_release", d.jog_release)
             case MoveTo(target=target, kind=kind):
                 self._call("move_to", d.move_to, target, kind)
-            case StreamTarget(pose=pose):
-                self._call("stream_target", d.stream_target, pose)
+            case StreamTarget():
+                self._log("error", "StreamTarget must go through worker.stream(), not the queue")
             case Gripper(open=is_open):
                 self._call("gripper", d.gripper, is_open)
             case Diagnose(reply=reply):
@@ -244,6 +260,54 @@ class RobotWorker:
             self.gate.counts[why[0]] = self.gate.counts.get(why[0], 0) + 1
             self._log("warn", f"hold-jog released ({why[0]}): {why[1]}")
             self._call("jog_release", self.driver.jog_release)
+
+    def _stream_tick(self, state: RobotState) -> None:
+        now = now_ns()
+        cmd = self._stream_latest
+        if cmd is None:
+            if self._streaming and now - self._stream_input_ns > self.gate.limits.stale_ms * 1e6:
+                self._log("warn", "teleop input went silent, stream stopped")
+                self._stop_stream()
+            return
+        if now - self._last_stream_ns < self.stream_period_ns:
+            return
+        self._stream_latest = None
+        if self._stream_latched:
+            if not cmd.hold:
+                self._stream_latched = False
+                self._log("info", "hold-to-move released after STOP, teleop can start again")
+            return
+        if not self._streaming:
+            if not cmd.hold:
+                return  # idle phone, nothing to do
+            self.gate.reset_stream(state.tcp)  # seeded from the measured pose: the first target can't jump
+        verdict = self.gate.check(cmd, state)
+        if isinstance(verdict, Rejected):
+            self.last_command = CommandRecord(now, cmd, None, verdict.rule)
+            if verdict.rule in ("hold", "stale", "ready"):
+                if self._streaming:
+                    self._stop_stream()
+            elif verdict.rule == "teleport" and self.on_teleport is not None:
+                self.on_teleport()
+            if verdict.rule != "hold":
+                self._log_rule(verdict.rule, "warn", f"stream rejected ({verdict.rule}): {verdict.reason}")
+            return
+        rules = ",".join(verdict.clamped) or None
+        self.last_command = CommandRecord(now, cmd, verdict.cmd, rules)
+        if rules:
+            self._log_rule(f"stream:{rules}", "info", f"stream clamped by {rules}")
+        if self._call("stream_target", self.driver.stream_target, verdict.cmd.pose):
+            self._streaming = True
+            self._last_stream_ns = now
+
+    def _stop_stream(self) -> None:
+        self._end_stream()
+        self._call("stop", self.driver.stop)
+
+    def _end_stream(self) -> None:
+        self._streaming = False
+        self._stream_latest = None
+        self.gate.reset_stream(None)
 
     def _read_state(self) -> RobotState:
         try:

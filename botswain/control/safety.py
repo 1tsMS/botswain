@@ -5,7 +5,8 @@ changed it) or Rejected (rule + a reason a human can read). It never talks to th
 Unknown command types are rejected: a new motion command must get its own rule before it can move anything.
 
 Rules: ready check, speed cap, workspace box (clamp steps, reject moves), joint limits (clamp steps, reject
-moves), hold-jog limits. Streaming rules (T5) plug in here too.
+moves), hold-jog limits, and for teleop streaming: hold-to-move, stale input, teleport guard, step clamp.
+Streaming is the one stateful part: the gate remembers the last target it let through.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from dataclasses import dataclass, replace
 import numpy as np
 from transforms3d.euler import euler2mat
 
+from botswain.core.clock import now_ns
 from botswain.core.config import LimitsCfg
 from botswain.core.types import (
     ClearError,
@@ -90,6 +92,8 @@ class SafetyGate:
         self.limits = limits
         self.period_s = period_s
         self.counts: dict[str, int] = {}
+        self._last_sent: Pose | None = None  # last streamed target that went to the robot
+        self._last_raw: np.ndarray | None = None  # last streamed input position (for the teleport guard)
 
     def check(self, cmd: Command, state: RobotState) -> Verdict:
         verdict = self._check(cmd, state)
@@ -116,6 +120,8 @@ class SafetyGate:
         reason = not_ready_reason(state, modes)
         if reason is not None:
             return Rejected("ready", reason)
+        if isinstance(cmd, StreamTarget):
+            return self._stream(cmd, state)
         if isinstance(cmd, JogStep):
             return self._jog_step(cmd, state)
         if isinstance(cmd, MoveTo):
@@ -124,6 +130,44 @@ class SafetyGate:
             why = self.hold_violation(cmd, state, margin_mm=0.0, margin_deg=0.0)
             return Rejected(*why) if why else Allowed(cmd)
         return Allowed(cmd)
+
+    # ---- streaming (teleop) ----
+
+    def reset_stream(self, seed: Pose | None) -> None:
+        """Start (seed = measured pose) or end (None) a stream. The first target can then never jump."""
+        self._last_sent = seed
+        self._last_raw = None
+
+    def _stream(self, cmd: StreamTarget, state: RobotState) -> Verdict:
+        if not cmd.hold:
+            return Rejected("hold", "hold-to-move released")
+        age_ms = (now_ns() - cmd.t_ns) / 1e6
+        if age_ms > self.limits.stale_ms:
+            return Rejected("stale", f"input sample is {age_ms:.0f} ms old")
+        raw = np.array(cmd.pose.xyz)
+        if self._last_raw is not None:
+            jump = float(np.linalg.norm(raw - self._last_raw))
+            if jump > self.limits.teleport_mm:
+                self._last_raw = None  # the input re-anchors; the next sample starts a fresh comparison
+                return Rejected("teleport", f"input jumped {jump:.0f} mm between two samples (tracking glitch)")
+        self._last_raw = raw
+        last = self._last_sent or state.tcp
+        rules = []
+        target, was = clamp_step(last, cmd.pose, self.limits.max_tcp_speed_mm_s * self.period_s,
+                                 self.limits.max_step_deg)
+        if was:
+            rules.append("step")
+        target, was = self._clamp_box(target)
+        if was:
+            rules.append("box")
+        self._last_sent = target
+        return Allowed(replace(cmd, pose=target), tuple(rules))
+
+    def _clamp_box(self, pose: Pose) -> tuple[Pose, bool]:
+        xyz = [min(max(v, lo), hi) for v, (lo, hi) in zip(pose.xyz, self.limits.box_mm, strict=True)]
+        if xyz == list(pose.xyz):
+            return pose, False
+        return replace(pose, x=xyz[0], y=xyz[1], z=xyz[2]), True
 
     # ---- workspace box + joint limits ----
 
@@ -238,3 +282,19 @@ def tool_rotation(pose: Pose) -> np.ndarray:
     Verify on the CR5 (SPEC 10): a tool-frame step must move along the tool axis DobotStudio shows.
     """
     return euler2mat(*np.radians(pose.rpy), axes="sxyz")
+
+
+def clamp_step(last: Pose, target: Pose, max_mm: float, max_deg: float) -> tuple[Pose, bool]:
+    """Move from `last` toward `target` by at most max_mm (straight line) and max_deg per rotation axis.
+
+    Clamp, never drop: a fast phone move makes the arm follow slower, not freeze (the Phone2Act lesson).
+    """
+    d = np.array(target.xyz) - np.array(last.xyz)
+    dist = float(np.linalg.norm(d))
+    xyz = np.array(target.xyz) if dist <= max_mm else np.array(last.xyz) + d * (max_mm / dist)
+    rpy = []
+    for lo_v, hi_v in zip(last.rpy, target.rpy, strict=True):
+        delta = (hi_v - lo_v + 180.0) % 360.0 - 180.0  # shortest way round
+        rpy.append(lo_v + max(-max_deg, min(max_deg, delta)) if abs(delta) > max_deg else hi_v)
+    clamped = dist > max_mm or any(r != t for r, t in zip(rpy, target.rpy, strict=True))
+    return Pose(*xyz, *rpy), clamped

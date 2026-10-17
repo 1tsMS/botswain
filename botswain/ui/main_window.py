@@ -24,12 +24,15 @@ from botswain.core.types import (
 )
 from botswain.ui.docks import LogDock, camera_dock
 from botswain.ui.doctor_dialog import DoctorDialog
+from botswain.ui.pages.cameras_page import CamerasPage
 from botswain.ui.pages.jog_page import JogPage
 from botswain.ui.pages.placeholder_page import PlaceholderPage
 from botswain.ui.pages.points_page import PointsView
+from botswain.ui.pages.teleop_page import TeleopPage
 from botswain.ui.rail import PAGES, Rail
 from botswain.ui.status_bar import StatusBar
 from botswain.ui.toolbar import TopToolbar
+from botswain.ui.widgets.camera_tile import CameraGrid
 
 STOP_KEYS = (Qt.Key.Key_Space, Qt.Key.Key_Escape)
 
@@ -74,12 +77,16 @@ class MainWindow(QMainWindow):
         self.jog_page = JogPage(cfg, caps, self._submit, self._log, view_3d=view_3d)
         self.points = self._load_points(cfg)
         self.points_page = PointsView(self.points, self._submit, self._log)
+        self.teleop_page = TeleopPage(worker, self._log)
+        self.cameras_page = CamerasPage(self._log)
         notes = {"Script": "coming later", "Blocks": "coming later",
                  "Teleop": "phone teleop comes in T5", "Cameras": "cameras come in T5",
                  "Settings": f"robot settings live in {cfg.path.name}"}
         self.pages: dict[str, QWidget] = {}
         for name in PAGES:
-            page = {"Jog": self.jog_page, "Points": self.points_page}.get(name) or PlaceholderPage(name, notes[name])
+            built = {"Jog": self.jog_page, "Points": self.points_page, "Teleop": self.teleop_page,
+                     "Cameras": self.cameras_page}
+            page = built.get(name) or PlaceholderPage(name, notes[name])
             self.pages[name] = page
             self.stack.addWidget(page)
         self.setCentralWidget(self.stack)
@@ -92,7 +99,9 @@ class MainWindow(QMainWindow):
         self.log_dock.tabs.insertTab(1, self.points_dock_view, "Points")
         for view in (self.points_page, self.points_dock_view):
             view.changed.connect(self._refresh_points)
-        self.camera_dock = camera_dock()
+        self.camera_grid = CameraGrid()
+        self.camera_dock = camera_dock(self.camera_grid)
+        self.cameras_page.cameras_changed.connect(self.camera_grid.set_cameras)
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.log_dock)
         self.splitDockWidget(self.log_dock, self.camera_dock, Qt.Orientation.Horizontal)
         self.resizeDocks([self.log_dock, self.camera_dock], [8, 5], Qt.Orientation.Horizontal)
@@ -203,7 +212,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         QApplication.instance().removeEventFilter(self.stop_filter)
+        self.teleop_page.shutdown()
         self.worker.shutdown()  # sends stop, then disconnects
+        self.cameras_page.stop_all()
         self.jog_page.robot_view.close_view()
         super().closeEvent(event)
 

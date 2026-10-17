@@ -70,12 +70,12 @@ class LogDock(QDockWidget):
         self.meta.setText(f"{self.log_view.entries} entries")
 
 
-def camera_dock() -> QDockWidget:
+def camera_dock(content: QWidget) -> QDockWidget:
     box = set_role(QWidget(), "dock")
     box.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
     v = QVBoxLayout(box)
     v.setContentsMargins(0, 0, 0, 0)
     v.setSpacing(0)
     v.addWidget(set_role(QLabel("Cameras"), "dockHead"))
-    v.addWidget(_empty("No cameras yet"), 1)
+    v.addWidget(content, 1)
     return _bare_dock("Cameras", box)

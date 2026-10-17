@@ -2,6 +2,7 @@ import pytest
 from helpers import ROBOTS, make_state
 
 from botswain.control.safety import Allowed, Rejected, SafetyGate
+from botswain.core.clock import now_ns
 from botswain.core.config import load_robot_config
 from botswain.core.types import (
     ClearError,
@@ -72,7 +73,7 @@ def test_gripper_needs_link_not_enable(gate):
 
 
 def test_stream_allowed_while_streaming(gate):
-    cmd = StreamTarget(make_state().tcp, 0, "test", True)
+    cmd = StreamTarget(make_state().tcp, now_ns(), "test", True)
     assert isinstance(gate.check(cmd, make_state(Mode.STREAMING)), Allowed)
 
 

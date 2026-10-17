@@ -159,3 +159,32 @@ def test_app_drives_fake_dobot_controller(qtbot, make_window):
         assert ctrl.commands[-2:] == ["MoveJog()", "Stop()"]
     finally:
         ctrl.stop()
+
+
+def test_teleop_page_starts_and_stops_server(qtbot, make_window, monkeypatch):
+    import socket
+
+    from botswain.ui.pages import teleop_page
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    monkeypatch.setattr(teleop_page, "PORT", port)
+    _, w = make_window()
+    page = w.teleop_page
+    page.toggle_server()
+    assert page.server is not None
+    qtbot.waitUntil(lambda: str(port) in page.url_label.text(), timeout=1000)
+    page.toggle_server()
+    assert page.server is None
+
+
+def test_camera_dock_follows_cameras_page(qtbot, make_window):
+    from botswain.sensors.cameras import CameraThread
+
+    _, w = make_window()
+    cam = CameraThread(0, "front")
+    w.cameras_page.cameras = [cam]
+    w.cameras_page._changed()
+    assert len(w.camera_grid.tiles) == 1 and len(w.cameras_page.grid.tiles) == 1

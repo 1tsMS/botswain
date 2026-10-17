@@ -1,0 +1,17 @@
+# Lab Dobot CR5, V4 controller. First-run limits are small on purpose; widen step by step after testing.
+name: Dobot CR5
+driver: dobot_v4
+connection: {ip: 192.168.5.1, dashboard_port: 29999, motion_port: 29999, feedback_port: 30004, http_port: 22000}
+model: {urdf: ../assets/dobot_cr5/cr5_robot.urdf}
+limits:
+  speed_cap_pct: 20
+  box_mm: {x: [-632, -332], y: [-286, 14], z: [334, 634]}  # +-150 mm around the Phone2Act start pose
+  joints_deg: [[-360, 360], [-360, 360], [-160, 160], [-360, 360], [-360, 360], [-360, 360]]
+  max_tcp_speed_mm_s: 150
+  max_step_deg: 2.0
+  teleport_mm: 80
+  stale_ms: 200
+stream: {period_s: 0.03, aheadtime: 50, gain: 500}
+gripper: {type: dh_modbus, slave: 1, baud: 115200}
+home_joints_deg: [0, 0, 90, 0, -90, 0]
+home_confirmed: false  # read the real home angles off the pendant in the lab, then set true

@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Botswain: Jog (final mockup)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  /* C style (black chrome, light workspace, red = danger/record only) on MS's old RoboSoftware layout:
+     icon toolbar on top, icon rail on the left, JOG = Orientation | Control + Speed | Robot view, log at the bottom.
+     App chrome borrowed from Fusion (grouped icon-over-label toolbar), Blender (collapsible panel headers),
+     OBS (titled bottom docks, status bar). */
+  :root {
+    --chrome: #111214;
+    --chrome-2: #1c1d20;
+    --chrome-3: #26282c;
+    --chrome-line: #2c2e33;
+    --chrome-text: #e8e8ea;
+    --chrome-dim: #8d9097;
+    --bg: #e9e9e6;
+    --panel: #f7f7f5;
+    --field: #ffffff;
+    --ink: #1a1b1e;
+    --dim: #62656c;
+    --faint: #a3a6ad;
+    --line: #d9d9d5;
+    --key: #ffffff;
+    --keyline: #cfd0cc;
+    --sel: #1f6feb;
+    --red: #e5322d;
+    --ok: #3fb950;
+    --warn: #c9851a;
+    --r: 4px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { height: 100vh; min-width: 1280px; background: var(--bg); color: var(--ink);
+    font: 400 12.5px/1.4 "IBM Plex Sans", system-ui, sans-serif; display: flex; flex-direction: column; }
+  button, select, input { font: inherit; color: inherit; }
+  button { cursor: default; }
+  .num { font-family: "IBM Plex Mono", monospace; font-variant-numeric: tabular-nums; }
+  svg.i { width: 20px; height: 20px; stroke: currentColor; fill: none; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  svg.s { width: 14px; height: 14px; }
+
+  /* menu bar */
+  .menubar { height: 26px; background: var(--chrome); color: var(--chrome-dim); display: flex; align-items: center; gap: 2px; padding: 0 8px; border-bottom: 1px solid var(--chrome-line); }
+  .menubar .logo { display: flex; align-items: center; gap: 7px; color: var(--chrome-text); font-weight: 600; margin-right: 10px; }
+  .menubar .logo i { width: 12px; height: 12px; border-radius: 3px; background: var(--red); }
+  .menubar span { padding: 2px 8px; border-radius: 3px; }
+  .menubar span:hover { background: var(--chrome-3); color: var(--chrome-text); }
+  .menubar .proj { margin-left: auto; font-size: 11.5px; }
+
+  /* toolbar: Fusion-style groups, icon over label, group name underneath */
+  .toolbar { height: 76px; background: var(--chrome-2); display: flex; align-items: stretch; padding: 0 6px; border-bottom: 1px solid var(--chrome-line); color: var(--chrome-text); }
+  .group { display: flex; flex-direction: column; padding: 6px 6px 4px; border-right: 1px solid var(--chrome-line); }
+  .group .tools { display: flex; gap: 2px; flex: 1; }
+  .group .gname { font-size: 10px; letter-spacing: .08em; color: var(--chrome-dim); text-align: center; text-transform: uppercase; }
+  .tool { width: 74px; border: 0; border-radius: var(--r); background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font-size: 11.5px; color: var(--chrome-text); }
+  .tool:hover { background: var(--chrome-3); }
+  .tool:active { transform: scale(0.97); }
+  .tool.on { background: rgba(31,111,235,.22); }
+  .tool .dot { position: relative; }
+  .tool .dot::after { content: ""; position: absolute; right: -3px; top: -1px; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); box-shadow: 0 0 0 2px var(--chrome-2); }
+  .tb-right { margin-left: auto; display: flex; align-items: center; gap: 12px; padding: 0 8px; }
+  .state { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+  .state b { display: flex; align-items: center; gap: 7px; font-weight: 500; }
+  .state b::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--ok); }
+  .state small { color: var(--chrome-dim); font-size: 11px; }
+  .stop { width: 112px; height: 56px; border: 0; border-radius: 6px; background: var(--red); color: #fff; font-weight: 600; letter-spacing: .06em; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; }
+  .stop:active { transform: scale(0.97); }
+  .stop small { font: 400 10px "IBM Plex Mono", monospace; opacity: .8; letter-spacing: 0; }
+
+  .body { flex: 1; min-height: 0; display: grid; grid-template-columns: 64px 1fr; }
+
+  /* left rail, same order as the old app */
+  .rail { background: var(--chrome); display: flex; flex-direction: column; align-items: center; padding: 8px 0; gap: 2px; }
+  .rail button { width: 52px; padding: 7px 0 6px; border: 0; border-radius: 6px; background: transparent; color: var(--chrome-dim); display: flex; flex-direction: column; align-items: center; gap: 3px; font-size: 10.5px; }
+  .rail button:hover { color: var(--chrome-text); }
+  .rail button.on { background: var(--chrome-3); color: var(--chrome-text); box-shadow: inset 2px 0 0 var(--red); }
+  .rail .end { margin-top: auto; }
+
+  .workspace { display: grid; grid-template-rows: 1fr 176px; min-height: 0; }
+
+  /* JOG page: old layout. Orientation | Control over Speed | Robot view */
+  .page { display: grid; grid-template-columns: 1fr 1.05fr 1fr; grid-template-rows: 1fr auto; gap: 8px; padding: 8px; min-height: 0; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
+  .ph { height: 30px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 10px; border-bottom: 1px solid var(--line); background: #efefec; font-weight: 600; font-size: 12px; }
+  .ph .caret { color: var(--faint); font-size: 10px; }
+  .ph .meta { margin-left: auto; font-weight: 400; color: var(--faint); font-size: 11px; }
+  .pb { padding: 12px; display: flex; flex-direction: column; gap: 12px; min-height: 0; flex: 1; }
+  .orient { grid-row: 1 / 3; }
+  .viewp { grid-row: 1 / 3; grid-column: 3; }
+
+  .lab { font-size: 11px; color: var(--dim); font-weight: 500; }
+  select { height: 28px; border: 1px solid var(--keyline); border-radius: var(--r); background: var(--field); padding: 0 8px; }
+  .fields { display: grid; grid-template-columns: 26px 1fr 26px 1fr; gap: 6px 8px; align-items: center; }
+  .fields label { color: var(--dim); font-weight: 500; }
+  .fields input { height: 28px; border: 1px solid var(--keyline); border-radius: var(--r); background: var(--field); text-align: right; padding: 0 8px; font-family: "IBM Plex Mono", monospace; }
+  .fields input:focus { outline: 2px solid var(--sel); outline-offset: -1px; }
+  .fields input.near { color: var(--red); }
+  .hr { height: 1px; background: var(--line); }
+  .btnrow { display: flex; gap: 6px; margin-top: auto; }
+  .btn { height: 32px; flex: 1; border: 1px solid var(--keyline); border-radius: var(--r); background: var(--key); font-weight: 500; }
+  .btn:hover { border-color: #b9bab5; }
+  .btn:active { transform: scale(0.97); }
+  .btn.primary { background: var(--ink); color: #fff; border-color: var(--ink); }
+
+  /* control: XYZ left two columns, joints right two columns (as in the old app) */
+  .seg { display: flex; border: 1px solid var(--keyline); border-radius: var(--r); overflow: hidden; width: fit-content; }
+  .seg button { height: 26px; padding: 0 11px; border: 0; border-right: 1px solid var(--keyline); background: var(--key); color: var(--dim); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--ink); color: #fff; }
+  .ctl { display: grid; grid-template-columns: 1fr 1fr 12px 1fr 1fr; gap: 6px; }
+  .key { height: 34px; border: 1px solid var(--keyline); border-radius: var(--r); background: var(--key); font-weight: 600; font-family: "IBM Plex Mono", monospace; }
+  .key:hover { border-color: #b9bab5; }
+  .key:active { transform: scale(0.96); background: #e6eefc; border-color: var(--sel); }
+  .gap { grid-column: 3; }
+
+  /* speed: old layout, minus buttons left, slider middle, plus buttons right */
+  .speed-top { display: flex; align-items: center; gap: 8px; }
+  .speed-top .val { margin-left: auto; width: 74px; height: 32px; border: 1px solid var(--keyline); border-radius: var(--r); background: var(--field); display: flex; align-items: center; justify-content: flex-end; padding: 0 8px; font: 500 16px "IBM Plex Mono", monospace; }
+  .speed { display: grid; grid-template-columns: 52px 1fr 52px; gap: 8px; align-items: center; }
+  .speed .col { display: grid; gap: 4px; }
+  .speed .col .key { height: 26px; font-size: 12px; }
+  .track { height: 4px; border-radius: 2px; background: var(--keyline); position: relative; }
+  .track::before { content: ""; position: absolute; inset: 0 70% 0 0; border-radius: 2px; background: var(--ink); }
+  .track::after { content: ""; position: absolute; left: 30%; top: -7px; width: 18px; height: 18px; margin-left: -9px; border-radius: 50%; background: #fff; border: 1px solid var(--keyline); box-shadow: 0 1px 2px rgba(0,0,0,.2); }
+
+  /* 3D view */
+  .vp { flex: 1; position: relative; background: radial-gradient(ellipse at 50% 40%, #fbfbfa, #e3e3df 75%); }
+  .vp .chips { position: absolute; top: 8px; left: 8px; display: flex; gap: 4px; }
+  .vp .chips span { height: 22px; display: inline-flex; align-items: center; padding: 0 8px; border-radius: 3px; background: rgba(255,255,255,.85); border: 1px solid var(--line); font-size: 11px; color: var(--dim); }
+  .vp .chips span.on { color: var(--ink); border-color: var(--keyline); }
+  .vp svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  .vp .foot { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: var(--faint); }
+
+  /* bottom docks: OBS-style titled docks */
+  .docks { display: grid; grid-template-columns: 1.6fr 1fr; gap: 1px; background: var(--chrome-line); border-top: 1px solid var(--chrome-line); }
+  .dock { background: var(--chrome); color: var(--chrome-text); display: flex; flex-direction: column; min-height: 0; }
+  .dh { height: 28px; flex: none; display: flex; align-items: stretch; border-bottom: 1px solid var(--chrome-line); background: var(--chrome-2); }
+  .dh span { display: flex; align-items: center; padding: 0 12px; color: var(--chrome-dim); font-size: 11.5px; border-right: 1px solid var(--chrome-line); }
+  .dh span.on { color: var(--chrome-text); background: var(--chrome); }
+  .dh .meta { margin-left: auto; border: 0; }
+  .log { padding: 6px 12px; font: 400 11.5px/1.75 "IBM Plex Mono", monospace; color: #b9bcc2; overflow: hidden; }
+  .log .t { color: #6f727a; margin-right: 10px; }
+  .log .w { color: #f0b45a; }
+  .camrow { flex: 1; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 6px; }
+  .cam { border-radius: 4px; background: linear-gradient(160deg, #3b3d42, #1f2023); position: relative; }
+  .cam span { position: absolute; left: 6px; top: 6px; font-size: 10.5px; padding: 2px 6px; border-radius: 3px; background: rgba(17,18,20,.75); color: var(--chrome-text); }
+
+  .status { height: 24px; background: var(--chrome-2); color: var(--chrome-dim); border-top: 1px solid var(--chrome-line); display: flex; align-items: center; gap: 18px; padding: 0 10px; font-size: 11px; }
+  .status .num { color: var(--chrome-text); }
+  .status .ok { color: #7ee28d; }
+</style>
+</head>
+<body>
+  <div class="menubar">
+    <div class="logo"><i></i>Botswain</div>
+    <span>File</span><span>Robot</span><span>View</span><span>Tools</span><span>Help</span>
+    <span class="proj num">robots/dobot_cr5.yaml</span>
+  </div>
+
+  <div class="toolbar">
+    <div class="group">
+      <div class="tools">
+        <button class="tool"><span class="dot"><svg class="i" viewBox="0 0 24 24"><path d="M12 3v9M6.3 7a8 8 0 1 0 11.4 0"/></svg></span>Disconnect</button>
+        <button class="tool"><svg class="i" viewBox="0 0 24 24"><path d="M22 12h-4l-3 8L9 4l-3 8H2"/></svg>Doctor</button>
+      </div>
+      <div class="gname">Connection</div>
+    </div>
+    <div class="group">
+      <div class="tools">
+        <button class="tool on"><svg class="i" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/></svg>Unlocked</button>
+        <button class="tool"><svg class="i" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5"/></svg>Clear error</button>
+        <button class="tool"><svg class="i" viewBox="0 0 24 24"><path d="m3 11 9-8 9 8M5 10v10h14V10"/></svg>Home</button>
+        <button class="tool"><svg class="i" viewBox="0 0 24 24"><path d="M9 11V5a2 2 0 0 1 4 0v6M13 10V8a2 2 0 0 1 4 0v5a7 7 0 0 1-14 0v-2a2 2 0 0 1 4 0"/></svg>Drag mode</button>
+      </div>
+      <div class="gname">Robot</div>
+    </div>
+    <div class="group">
+      <div class="tools">
+        <button class="tool"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>Record</button>
+        <button class="tool"><svg class="i" viewBox="0 0 24 24"><path d="M14 4h6v6M10 20H4v-6M20 4l-7 7M4 20l7-7"/></svg>Save point</button>
+      </div>
+      <div class="gname">Data</div>
+    </div>
+    <div class="tb-right">
+      <div class="state"><b>Enabled · idle</b><small>Dobot CR5 · 192.168.5.1</small></div>
+      <button class="stop">STOP<small>Space</small></button>
+    </div>
+  </div>
+
+  <div class="body">
+    <nav class="rail">
+      <button><svg class="i" viewBox="0 0 24 24"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6M9 14l-2 2 2 2M15 14l2 2-2 2"/></svg>Script</button>
+      <button><svg class="i" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 17.5h7M17.5 14v7"/></svg>Blocks</button>
+      <button><svg class="i" viewBox="0 0 24 24"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6a4 4 0 0 0 0-8H10a4 4 0 0 1 0-8h6"/></svg>Points</button>
+      <button class="on"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="8" r="1.4" fill="currentColor"/><circle cx="8" cy="12" r="1.4" fill="currentColor"/><circle cx="16" cy="12" r="1.4" fill="currentColor"/><circle cx="12" cy="16" r="1.4" fill="currentColor"/></svg>Jog</button>
+      <button><svg class="i" viewBox="0 0 24 24"><rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/></svg>Teleop</button>
+      <button><svg class="i" viewBox="0 0 24 24"><rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/></svg>Cameras</button>
+      <button class="end"><svg class="i" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/></svg>Settings</button>
+    </nav>
+
+    <div class="workspace">
+      <div class="page">
+        <section class="panel orient">
+          <div class="ph"><span class="caret">▼</span>Orientation<span class="meta">live · type to set a target</span></div>
+          <div class="pb">
+            <div style="display:flex; align-items:center; gap:8px"><span class="lab">Frame</span><select><option>Base</option><option>Tool</option><option>User</option></select></div>
+            <div class="lab">Tool pose (mm / deg)</div>
+            <div class="fields">
+              <label>X</label><input value="-482.0"><label>Rx</label><input value="179.8">
+              <label>Y</label><input value="-136.2"><label>Ry</label><input value="0.4">
+              <label>Z</label><input value="484.5"><label>Rz</label><input value="-91.2">
+            </div>
+            <div class="hr"></div>
+            <div class="lab">Joints (deg)</div>
+            <div class="fields">
+              <label>J1</label><input value="-12.40"><label>J4</label><input value="-88.10">
+              <label>J2</label><input value="34.92"><label>J5</label><input value="90.00">
+              <label>J3</label><input class="near" value="71.05"><label>J6</label><input value="4.33">
+            </div>
+            <div class="btnrow"><button class="btn">Copy current</button><button class="btn primary">Move to target</button></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="ph"><span class="caret">▼</span>Control<span class="meta">step</span>
+            <div class="seg"><button>0.5</button><button class="on">1</button><button>5</button><button>10</button><button>Hold</button></div>
+          </div>
+          <div class="pb">
+            <div class="ctl">
+              <button class="key">X −</button><button class="key">X +</button><span class="gap"></span><button class="key">J1 −</button><button class="key">J1 +</button>
+              <button class="key">Y −</button><button class="key">Y +</button><span class="gap"></span><button class="key">J2 −</button><button class="key">J2 +</button>
+              <button class="key">Z −</button><button class="key">Z +</button><span class="gap"></span><button class="key">J3 −</button><button class="key">J3 +</button>
+              <button class="key">Rx −</button><button class="key">Rx +</button><span class="gap"></span><button class="key">J4 −</button><button class="key">J4 +</button>
+              <button class="key">Ry −</button><button class="key">Ry +</button><span class="gap"></span><button class="key">J5 −</button><button class="key">J5 +</button>
+              <button class="key">Rz −</button><button class="key">Rz +</button><span class="gap"></span><button class="key">J6 −</button><button class="key">J6 +</button>
+            </div>
+            <div class="btnrow" style="margin-top:0"><button class="btn">Gripper open</button><button class="btn">Gripper close</button></div>
+          </div>
+        </section>
+
+        <section class="panel viewp">
+          <div class="ph"><span class="caret">▼</span>Robot view<span class="meta num">cr5_robot.urdf</span></div>
+          <div class="vp">
+            <div class="chips"><span class="on">Perspective</span><span>Safety box</span><span>Target</span></div>
+            <svg viewBox="0 0 400 420" preserveAspectRatio="xMidYMid meet">
+              <g stroke="#cfd0cc" stroke-width="1"><path d="M60 330 L200 285 L340 330 L200 375 Z" fill="none"/><path d="M95 318.75 L235 363.75 M130 307.5 L270 352.5 M165 296.25 L305 341.25 M95 341.25 L235 296.25 M130 352.5 L270 307.5 M165 363.75 L305 318.75"/></g>
+              <g fill="none" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M190 330 L190 240 L255 170 L320 200" stroke="#6b6e75" stroke-width="18"/>
+                <circle cx="190" cy="240" r="12" fill="#1a1b1e"/><circle cx="255" cy="170" r="11" fill="#1a1b1e"/>
+                <path d="M320 200 l14 3 M320 200 l8 12" stroke="#1a1b1e" stroke-width="5"/>
+                <rect x="155" y="324" width="70" height="14" rx="3" fill="#1a1b1e"/>
+                <circle cx="342" cy="206" r="6" stroke="#1f6feb" stroke-width="2" stroke-dasharray="3 3"/>
+              </g>
+              <g stroke-width="2.5"><path d="M30 390 h26" stroke="#e5322d"/><path d="M30 390 v-26" stroke="#3fb950"/><path d="M30 390 l-14 10" stroke="#1f6feb"/></g>
+            </svg>
+            <div class="foot num">125 Hz</div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="ph"><span class="caret">▼</span>Speed control</div>
+          <div class="pb">
+            <div class="speed-top"><select><option>Relative</option><option>Absolute</option></select><span class="lab">of max speed</span><span class="val">30%</span></div>
+            <div class="speed">
+              <div class="col"><button class="key">−1</button><button class="key">−5</button><button class="key">−15</button><button class="key">−25</button></div>
+              <div class="track"></div>
+              <div class="col"><button class="key">+1</button><button class="key">+5</button><button class="key">+15</button><button class="key">+25</button></div>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      <div class="docks">
+        <section class="dock">
+          <div class="dh"><span class="on">Log</span><span>Points</span><span>Episodes</span><span class="meta num">4 entries</span></div>
+          <div class="log">
+            <div><span class="t">14:02:11</span>Connected to 192.168.5.1 (V4 controller)</div>
+            <div><span class="t">14:02:12</span>Robot mode 5: enabled, idle</div>
+            <div class="w"><span class="t">14:02:40</span>J3 near limit: 71.0 of 75.0°</div>
+            <div><span class="t">14:02:41</span>Saved point P3</div>
+          </div>
+        </section>
+        <section class="dock">
+          <div class="dh"><span class="on">Cameras</span><span class="meta num">2 of 2 live</span></div>
+          <div class="camrow"><div class="cam"><span>front · cam 0</span></div><div class="cam"><span>wrist · cam 2</span></div></div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="status">
+    <span class="ok">● Link</span><span>Feedback <span class="num">125 Hz</span></span><span>Latency <span class="num">6 ms</span></span>
+    <span>Frame <span class="num">base</span></span><span>Safety box <span class="num">±150 mm</span></span>
+    <span style="margin-left:auto">Dataset <span class="num">D:\data\pick_cube</span></span>
+  </div>
+</body>
+</html>

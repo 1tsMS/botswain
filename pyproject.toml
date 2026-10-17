@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "botswain"
+version = "0.1.0"
+description = "Connect, check, jog, teleop and record datasets on cobots."
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.12"
+dependencies = [
+    "PySide6>=6.7",
+    "numpy>=2.0",
+    "PyYAML>=6.0",
+    "yourdfpy>=0.0.56",
+    "pyvista>=0.44",
+    "pyvistaqt>=0.11",
+    "opencv-python>=4.10",
+    "transforms3d>=0.4.2",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.6"]
+
+[project.scripts]
+botswain = "botswain.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["botswain*"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

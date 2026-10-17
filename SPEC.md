@@ -439,7 +439,24 @@ the arm's reach, speed cap 10 % for the first motion, stop at the first surprise
 **Stage 8, recording (if T6 is done)**
 - [ ] One 20 s episode with 1-2 cameras; reload it on the laptop.
 
-## 11. Open questions (need MS)
+## 11. Build notes (2026-10-17, what changed from the plan while building)
+
+- Doctor: network checks run in their own thread; driver checks run on the worker through a `Diagnose` command,
+  because the worker owns the sockets. Before Connect the Doctor opens its own short connections instead.
+- Connect sets SpeedFactor to 10 % (or the cap if lower) so the first move after Enable is slow. It never enables.
+- Dashboard replies are matched by the echoed command name: a late reply to a timed-out command is dropped.
+- `stop()` raises only when the link is dead (then the hint says: use the physical e-stop).
+- Feedback counts as lost after 300 ms without packets (review focus 1 asks for < 0.5 s).
+- Teleop uses our own uvicorn server with the `teleop` package's phone page; `Teleop.run()` cannot be stopped and
+  always uses the package's shared certificate. Own cert: put `cert.pem` + `key.pem` in `assets/certs/`.
+- Teleport guard compares two consecutive input samples, not input vs last sent target (that would trigger
+  whenever the step clamp makes the arm lag behind a fast hand).
+- STOP during teleop latches the stream until the phone's hold button is released.
+- Points: Go to is a joint move to the saved joints (same arm configuration). The gate checks joint limits only
+  for joint targets; the box is checked for pose targets.
+- Tool-frame steps are rotated with Rx/Ry/Rz as static XYZ Euler ('sxyz'). **Verify on the CR5.**
+
+## 12. Open questions (need MS)
 
 1. Controller firmware version on our CR5 (decides `RequestControl()` vs DobotStudio for TCP mode).
 2. Home pose: which joint angles are safe in our cell? (YAML has a placeholder; Home button stays disabled until confirmed.)

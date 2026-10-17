@@ -9,6 +9,7 @@ import logging
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -20,6 +21,24 @@ log = logging.getLogger(__name__)
 
 def open_capture(index: int):
     return cv2.VideoCapture(index, cv2.CAP_DSHOW)
+
+
+@dataclass(frozen=True)
+class CameraSource:
+    name: str
+    index: int
+
+
+def list_sources() -> list[CameraSource]:
+    """Every DirectShow video source by name: USB webcams, DroidCam, OBS Virtual Camera...
+
+    Fast (reads the device list, opens nothing). Falls back to probing indexes if the enumerator is missing.
+    """
+    try:
+        from cv2_enumerate_cameras import enumerate_cameras
+    except ImportError:
+        return [CameraSource(f"Camera {i}", i) for i in list_cameras()]
+    return [CameraSource(c.name, c.index) for c in enumerate_cameras(cv2.CAP_DSHOW)]
 
 
 def list_cameras(max_index: int = 4, opener: Callable[[int], object] = open_capture) -> list[int]:

@@ -7,7 +7,7 @@ from collections.abc import Callable
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QComboBox, QHBoxLayout, QPushButton, QVBoxLayout, QWidget
 
-from botswain.sensors.cameras import CameraThread, list_cameras
+from botswain.sensors.cameras import CameraSource, CameraThread, list_sources
 from botswain.ui.theme import set_role
 from botswain.ui.widgets.camera_tile import CameraGrid
 from botswain.ui.widgets.panel import Panel
@@ -22,14 +22,15 @@ class CamerasPage(QWidget):
         super().__init__(parent)
         self._log = log
         self.cameras: list[CameraThread] = []
+        self._names: dict[int, str] = {}
         lay = QVBoxLayout(self)
         lay.setContentsMargins(8, 8, 8, 8)
-        panel = Panel("Cameras", "USB, DirectShow")
+        panel = Panel("Cameras", "any video source: webcam, DroidCam, OBS")
         row = QHBoxLayout()
         self.scan_btn = self._button("Scan", "btn", self.scan)
         self.choice = QComboBox()
         self.choice.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.choice.setMinimumWidth(180)
+        self.choice.setMinimumWidth(240)
         self.choice.addItem("press Scan first", None)
         self.show_btn = self._button("Show", "primary", self.show_selected)
         self.stop_btn = self._button("Stop", "btn", self.stop_all)
@@ -48,19 +49,20 @@ class CamerasPage(QWidget):
         b.clicked.connect(slot)
         return b
 
-    def scan(self, indexes: list[int] | None = None) -> None:
-        """Probing is slow (about a second per index), so it only runs on request."""
+    def scan(self, sources: list[CameraSource] | None = None) -> None:
+        """Lists every video source Windows knows: USB webcams, DroidCam, OBS Virtual Camera..."""
         self.stop_all()
-        found = list_cameras() if indexes is None else indexes
+        found = list_sources() if sources is None else sources
+        self._names = {s.index: s.name for s in found}
         self.choice.clear()
-        for i in found:
-            self.choice.addItem(f"Camera {i}", i)
+        for s in found:
+            self.choice.addItem(s.name, s.index)
         if len(found) > 1:
-            self.choice.addItem("All cameras", ALL)
+            self.choice.addItem("All sources", ALL)
         if not found:
-            self.choice.addItem("no cameras found", None)
+            self.choice.addItem("no video sources found", None)
         self.show_btn.setEnabled(bool(found))
-        self._log("info", f"cameras found: {found or 'none'}")
+        self._log("info", f"video sources: {', '.join(s.name for s in found) or 'none'}")
 
     def show_selected(self) -> None:
         choice = self.choice.currentData()
@@ -70,7 +72,7 @@ class CamerasPage(QWidget):
         indexes = [self.choice.itemData(i) for i in range(self.choice.count())
                    if self.choice.itemData(i) not in (None, ALL)] if choice == ALL else [choice]
         for i in indexes:
-            cam = CameraThread(i, f"cam {i}")
+            cam = CameraThread(i, self._names.get(i, f"cam {i}"))
             try:
                 cam.start()
                 self.cameras.append(cam)

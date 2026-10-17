@@ -19,6 +19,7 @@ dependencies = [
     "opencv-python>=4.10",
     "transforms3d>=0.4.2",
     "teleop>=0.1.5",
+    "cv2-enumerate-cameras>=1.4",
 ]
 
 [project.optional-dependencies]

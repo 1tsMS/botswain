@@ -37,7 +37,7 @@ class FakeDriver(Driver):
         self.joint_speed_deg_s = joint_speed_deg_s
         self.capabilities = Capabilities(
             name=cfg.name, dof=cfg.dof, step_jog=True, hold_jog=True, streaming=True,
-            stream_rate_hz=1.0 / cfg.stream.period_s, gripper=True, drag_mode=False,
+            stream_rate_hz=1.0 / cfg.stream.period_s, gripper=cfg.gripper is not None, drag_mode=False,
             frames=("base", "tool"), max_tcp_speed_mm_s=lin_speed_mm_s,
         )
         # Start in the middle of the safety box, so jogging works right away.
@@ -190,6 +190,8 @@ class FakeDriver(Driver):
             self._mode = Mode.STREAMING
 
     def gripper(self, open: bool) -> None:
+        if not self.capabilities.gripper:
+            raise DriverError(-1, "no gripper in the robot YAML")
         self._command()
         with self._lock:
             self._gripper = 1.0 if open else 0.0

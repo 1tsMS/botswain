@@ -24,7 +24,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-qt>=4.4", "ruff>=0.6"]
-record = ["lerobot>=0.6,<0.7"]  # pulls torch: install only when recording
+record = ["lerobot[dataset]>=0.6,<0.7"]  # pulls torch: install only when recording
 
 [project.scripts]
 botswain = "botswain.__main__:main"

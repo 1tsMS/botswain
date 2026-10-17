@@ -30,6 +30,9 @@ class StatusBar(QStatusBar):
         self._box_text = "×".join(f"{s:g}" for s in spans) + " mm"
         self.set_state(RobotState.disconnected(cfg.dof), {}, "base", None)
 
+    def set_dataset(self, path: str | None) -> None:
+        self.dataset.setText(f"Dataset {_num(path or '–')}")
+
     def set_state(self, state: RobotState, gate_counts: dict[str, int], frame: str,
                   latency_ms: float | None) -> None:
         color = C["ok_text"] if state.link_ok else C["chrome_dim"]

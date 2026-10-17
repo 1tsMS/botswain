@@ -1,52 +1,226 @@
 # Botswain
 
-One desktop app to connect, check, jog, teleop and record datasets on cobots.
-First robot: Dobot CR5 (V4 controller). Windows only for now. Work in progress.
+A Windows desktop app to **connect, check, jog, teleoperate and record datasets** on collaborative robots.
+First robot: Dobot CR5 (V4 controller). Built for teleop and imitation-learning research, open for other
+robots: one driver file per brand.
 
-## Install
+| Works | Where it is tested |
+|---|---|
+| Connect, health check (Doctor), enable / disable, clear error, STOP | fake robot, fake Dobot controller |
+| Jog: steps or hold, base / tool frame, joints | fake robot, fake Dobot controller |
+| Live pose, joints and 3D model (CR5 URDF) | fake robot |
+| Safety gate: speed cap, workspace box, joint limits, hold-jog watchdog | unit tests |
+| Saved points, gripper (DH over RS485) | fake robot, fake Dobot controller |
+| Phone teleop (WebXR, hold to move) | unit and server tests; on a phone: see [Phone teleop](#phone-teleop) |
+| Cameras: any video source (webcam, DroidCam, OBS Virtual Camera) | this laptop |
+| Dataset recording in LeRobot format (commanded **and** measured actions) | LeRobot round-trip test |
 
-Python 3.12.
+**Not yet tested on the real CR5.** Follow the lab checklist in [SPEC.md section 10](SPEC.md) the first time.
+
+---
+
+## Quick start
+
+Needs Windows and Python 3.12.
 
 ```
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e .[dev]
-```
-
-Recording datasets needs LeRobot, which pulls in torch (large): `pip install -e .[record]`.
-
-## Run
-
-```
 .venv\Scripts\python -m botswain --robot robots/fake.yaml
 ```
 
-| Robot file | What it talks to |
+That opens the app with a **fake robot** (no hardware). Press **Connect**, then **Enable**, then jog.
+
+**From VS Code:** open the folder, go to Run and Debug (Ctrl+Shift+D), pick a configuration and press F5:
+
+| Configuration | What it runs |
 |---|---|
-| `robots/fake.yaml` | a pretend robot inside the app, no network |
-| `robots/dobot_cr5_fake.yaml` | the real Dobot driver against a pretend controller on this laptop |
-| `robots/dobot_cr5.yaml` | the lab CR5 at 192.168.5.1 |
+| Botswain: fake robot | the app with the built-in fake robot |
+| Botswain + fake Dobot controller | a pretend Dobot controller and the app talking to it with the real driver |
+| Botswain: lab CR5 (192.168.5.1) | the app on the real robot |
 
-For `dobot_cr5_fake.yaml`, start the pretend controller first in another terminal:
+**Recording datasets** needs LeRobot (adds about 0.3 GB download, 1 GB on disk, CPU torch):
 
 ```
-.venv\Scripts\python -m botswain.drivers.dobot.fake_controller
+.venv\Scripts\python -m pip install -e .[record]
 ```
 
-It listens on 29999 / 30003 / 30004 / 22000 and takes keys for testing: `p` pause feedback, `a` alarm,
-`s` split packets, `g` garbage bytes, `t` leave TCP mode.
+---
 
-Each robot YAML holds the connection and the safety limits (workspace box, joint limits, speed cap).
-Every motion command goes through the safety gate; Space or Esc stops from anywhere in the app.
-Connect never enables the robot. [SPEC.md](SPEC.md) explains how the pieces fit together.
+## Using it
 
-## Tests
+### 1. Pick the robot
+Each robot has a YAML file in `robots/` with its address and safety limits.
+
+| File | Talks to |
+|---|---|
+| `fake.yaml` | a fake robot inside the app (real CR5 kinematics, no network) |
+| `dobot_cr5_fake.yaml` | the fake Dobot controller on this laptop (start it first, see [Development](#development)) |
+| `dobot_cr5.yaml` | the lab CR5 at 192.168.5.1 |
+
+Without `--robot` the app opens the robot you used last.
+
+### 2. Connect, check, enable
+1. **Connect** opens the links and reads the state. It never enables the robot.
+2. **Doctor** runs health checks without moving anything: ping, ports, feedback rate, TCP mode, robot mode,
+   alarms, pose agreement, 3D model. Every failed check comes with a fix.
+3. **Enable** powers the motors. **Disable** turns them off. **Clear error** clears an alarm.
+
+On a Dobot that answers "Not Tcp": switch it to TCP/IP mode in DobotStudio Pro, or use
+**Robot > Take control** on firmware 4.6 and newer.
+
+### 3. STOP
+**Space** or **Esc** from anywhere in the app, or the red STOP button. STOP clears every queued command,
+ends any jog or teleop stream and sends the robot's stop. It never re-enables anything.
+In text fields (dataset name, task) Space types a space; **Esc still stops**.
+
+### 4. Jog
+- **Step sizes** 0.5 / 1 / 5 / 10 / 50 mm (or degrees), or **Hold** to move while the key is held.
+- **Frame:** Base or Tool for X..Rz. J1..J6 always move single joints.
+- **Speed:** -25 / -5 / -1, slider, +1 / +5 / +25. Range 1..100 % (cap in the robot YAML).
+- **Hold jog is safe by design:** the app sends a "still held" tick every 50 ms; if the app freezes or the
+  key is released, the robot stops within 150 ms. It also stops early before a limit.
+
+### 5. Move to a target
+The pose and joint fields show the robot live and cannot be edited, so typing never moves the arm.
+1. **Edit target** freezes the fields.
+2. **Copy current** fills them with the current position. Change the numbers you want.
+3. **Move to target** sends it: a straight line if you edited the pose, a joint move if you edited joints.
+
+### 6. Safety gate
+Every motion command passes the gate before the robot sees it.
+
+| Rule | What it does |
+|---|---|
+| Ready check | motion only when enabled and idle (or jogging / streaming for its own commands) |
+| Speed cap | speed above the YAML cap is lowered to the cap |
+| Joint limits (always on) | steps stop at the limit; moves outside are refused |
+| Safety box (toggle in the Robot view, off by default) | steps stop at the wall; moves outside are refused |
+| Teleop | hold-to-move, stale input stops, jumps are ignored, fast moves are slowed (never dropped) |
+| Bad numbers | NaN or infinity is always refused |
+
+Every clamp and refusal is written to the log and counted in the status bar.
+
+### 7. Saved points
+**Save point** (toolbar) or **Save current pose** (Points page) stores the pose and joints in
+`robots/<robot>.points.json`. **Go to** (or double-click) moves there with a joint move through the gate.
+
+### 8. Robot view
+3D model following the robot. Drag to orbit (it stays upright), scroll to zoom, **Reset view** to go back.
+Chips: **Safety box** (shows and enforces the box), **Target**. The gripper drawn on the flange is a simple
+stand-in: the CR5 URDF has no gripper.
+
+### Phone teleop
+Needs an Android phone with ARCore, in Google Chrome, on the same WiFi as the laptop.
+
+1. One time, in an admin PowerShell (Windows firewall):
+   `New-NetFirewallRule -DisplayName "Botswain phone" -Direction Inbound -Protocol TCP -LocalPort 4443 -Action Allow -Profile Private`
+2. In the app: Connect, Enable, **Teleop** page, **Start phone server**.
+3. On the phone open the **full** address shown (it ends with `?k=...`, a pairing key that changes every
+   start). Accept the certificate warning. Press **Start**, allow the camera.
+4. Hold the move button and move the phone. Let go and the robot stops.
+
+Start with motion scale 0.3 and rotation off. If Start does nothing, open the same address with `/check`
+instead of `/?k=...`: it tells you what the phone is missing. **Make my own HTTPS certificate** replaces the
+teleop package's shared certificate (needs Git for Windows).
+
+### Cameras
+**Cameras** page: **Scan** lists every video source Windows knows (USB webcams, DroidCam, OBS Virtual
+Camera...), pick one or "All sources", **Show**. DroidCam and OBS show a picture only while they run.
+
+### Recording datasets
+1. Start the cameras you want and Connect the robot.
+2. **Episodes** tab (bottom dock): dataset name and task ("pick the red cube").
+3. **Start** (or **Record** in the toolbar), do the task, **Save** (or **Discard** a bad take). Repeat.
+4. **Close dataset** when done (also happens when the app closes). Datasets are saved in `data/<name>/`.
+
+Every frame (30 per second) holds:
+
+| Key | Content |
+|---|---|
+| `observation.state` | measured joints, TCP pose, gripper |
+| `action` | the target actually sent, after the safety gate |
+| `observation.command_raw` | the input before the gate (shows clamping) |
+| `observation.controller_target` | the controller's own target |
+| `observation.t_*_ns` | real arrival times of state, command and each camera frame |
+| `observation.images.<camera>` | camera video |
+
+Load it with `LeRobotDataset("botswain/<name>", root="data/<name>", video_backend="pyav")`.
+
+---
+
+## How it works
+
+```
+GUI buttons, jog keys ─┐
+Move to target, points ├─> command queue ─> SAFETY GATE ─> DRIVER ─> robot (TCP/IP)
+Phone (WebXR)  ────────┘    (worker thread)      │              │
+STOP (Space/Esc) ── jumps the queue              │              └─ feedback thread (125 Hz) ─> state
+                                                 └─ clamp / refuse + reason in the log
+state ─> GUI (30 Hz), 3D view, recorder (with cameras, on one clock)
+```
+
+- One **worker thread** owns the robot driver. The GUI and every input only put commands in its queue.
+- The **driver** hides each brand behind the same small set of buttons (connect, read state, enable, jog,
+  move, stream, stop...) plus a capability card; the GUI hides what a robot can't do.
+- The **fake robot** uses the URDF for forward and inverse kinematics, so it behaves like the real arm.
+
+```
+botswain/
+  core/       types, clock, robot YAML loading, kinematics, logging
+  drivers/    driver contract, fake robot, dobot/ (commands, dashboard, feedback, gripper, fake controller)
+  control/    worker thread, safety gate, Doctor, saved points
+  teleop/     phone server, phone-to-robot mapping
+  sensors/    cameras
+  record/     recorder, LeRobot writer, recording session
+  ui/         main window, toolbar, pages, widgets, theme
+robots/       one YAML per robot
+assets/       CR5 URDF + meshes, fonts
+tests/        one test file per module (pytest)
+```
+
+More detail: [SPEC.md](SPEC.md) (design and decisions), [RESEARCH_NOTES.md](RESEARCH_NOTES.md) (protocol facts).
+
+---
+
+## Development
 
 ```
 .venv\Scripts\python -m pytest -q
 .venv\Scripts\python -m ruff check .
 ```
 
+**Fake Dobot controller:** a pretend CR5 on this laptop that speaks the real protocol, so the real driver can
+be tested at home:
+
+```
+.venv\Scripts\python -m botswain.drivers.dobot.fake_controller
+```
+
+Then run the app with `robots/dobot_cr5_fake.yaml`. In its window, type a key and Enter: `p` pause feedback,
+`a` alarm, `s` split packets, `g` garbage bytes, `t` leave TCP mode.
+
+**Adding a robot:** write `botswain/drivers/<brand>.py` implementing the contract in
+`botswain/drivers/base.py`, register it in `drivers/registry.py`, add a YAML in `robots/`.
+
+---
+
+## Troubleshooting
+
+| Problem | Fix |
+|---|---|
+| Connect fails: "Not Tcp" | TCP/IP mode in DobotStudio Pro (then close DobotStudio), or Robot > Take control (fw 4.6+) |
+| Doctor: ports closed | cable, controller power, laptop on a static IP in 192.168.5.x |
+| Jog keys grey | hover them: not connected, not enabled, in error, or busy |
+| Phone page: 403 | open the full address with `?k=...` from the Teleop page (the key changes each start) |
+| Phone: Start does nothing | open `/check`; use Chrome; install "Google Play Services for AR" |
+| Phone server won't start | another program uses port 4443 |
+| Camera tile black | DroidCam / OBS virtual camera not running, or the camera is used by another app |
+| Record button grey | install LeRobot (`pip install -e .[record]`) and Connect |
+
+Logs: `logs/botswain.log`.
+
 ## License
 
-Apache-2.0. The CR5 model in `assets/dobot_cr5/` is MIT (Dobot). IBM Plex fonts are OFL.
-The phone page comes from the `teleop` package (SpesRobotics, Apache-2.0).
+Apache-2.0. CR5 model in `assets/dobot_cr5/`: MIT (Dobot). IBM Plex fonts: OFL. Phone page: from the
+`teleop` package (SpesRobotics, Apache-2.0).

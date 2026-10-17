@@ -20,14 +20,17 @@ from botswain.core.types import (
     Joints,
     Mode,
     MoveTo,
+    RequestControl,
     RobotState,
 )
+from botswain.record.session import RecordingSession, lerobot_available, lerobot_writer_factory
 from botswain.ui.docks import LogDock, camera_dock
 from botswain.ui.doctor_dialog import DoctorDialog
 from botswain.ui.pages.cameras_page import CamerasPage
 from botswain.ui.pages.jog_page import JogPage
 from botswain.ui.pages.placeholder_page import PlaceholderPage
 from botswain.ui.pages.points_page import PointsView
+from botswain.ui.pages.record_bar import EpisodeBar
 from botswain.ui.pages.teleop_page import TeleopPage
 from botswain.ui.rail import PAGES, Rail
 from botswain.ui.status_bar import StatusBar
@@ -50,6 +53,9 @@ class StopKeyFilter(QObject):
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent) and event.key() in STOP_KEYS:
+            focus = QApplication.focusWidget()
+            if event.key() == Qt.Key.Key_Space and focus is not None and focus.property("free_text"):
+                return False  # typing a task or dataset name: Space is a space here, Esc still stops
             if not event.isAutoRepeat():
                 self._stop()
             return True
@@ -100,6 +106,11 @@ class MainWindow(QMainWindow):
         self.points_dock_view = PointsView(self.points, self._submit, self._log, save=self._save_point, dark=True)
         self.log_dock.tabs.removeTab(1)
         self.log_dock.tabs.insertTab(1, self.points_dock_view, "Points")
+        session = (RecordingSession(worker, lerobot_writer_factory(cfg.name.replace(" ", "_").lower()))
+                   if lerobot_available() else None)
+        self.episode_bar = EpisodeBar(session, lambda: self.cameras_page.cameras, self._log)
+        self.log_dock.tabs.removeTab(2)
+        self.log_dock.tabs.insertTab(2, self.episode_bar, "Episodes")
         for view in (self.points_page, self.points_dock_view):
             view.changed.connect(self._refresh_points)
         self.camera_grid = CameraGrid()
@@ -134,6 +145,8 @@ class MainWindow(QMainWindow):
         robot = bar.addMenu("Robot")
         robot.addAction("Connect / Disconnect", self._toggle_connect)
         robot.addAction("Clear error", lambda: self.worker.submit(ClearError()))
+        robot.addAction("Take control (RequestControl, Dobot firmware 4.6+)",
+                        lambda: self.worker.submit(RequestControl()))
         stop = QAction("STOP", self)
         stop.setShortcutVisibleInContextMenu(True)
         stop.triggered.connect(self.worker.request_stop)
@@ -161,6 +174,7 @@ class MainWindow(QMainWindow):
         tb.stop_button.pressed.connect(lambda: self.worker.request_stop())  # on press, not release
         tb.home_clicked.connect(self._home)
         tb.save_point_clicked.connect(self._save_point)
+        tb.record_clicked.connect(self._record_clicked)
 
     @staticmethod
     def _scrollable(page: QWidget) -> QScrollArea:
@@ -209,6 +223,14 @@ class MainWindow(QMainWindow):
             return
         self._submit(MoveTo(Joints(self.cfg.home_joints_deg), "joint"))
 
+    def _record_clicked(self) -> None:
+        """Toolbar Record: start an episode, or save the running one. Details live in the Episodes tab."""
+        self.log_dock.tabs.setCurrentWidget(self.episode_bar)
+        if self.episode_bar.recording:
+            self.episode_bar.save()
+        else:
+            self.episode_bar.start()
+
     def _simulate_hang(self) -> None:
         """Lab test for the hold-jog watchdog: the GUI stops sending ticks, the worker must release the jog."""
         self._log("warn", "simulating a 2 s GUI hang")
@@ -224,6 +246,12 @@ class MainWindow(QMainWindow):
         self.jog_page.set_state(state)
         latency = getattr(self.worker.driver, "latency_ms", None) if self._connected else None
         self.status.set_state(state, self.worker.gate.counts, self.jog_page.frame, latency)
+        bar = self.episode_bar
+        can_record = bar.session is not None and self._connected and state.link_ok
+        self.toolbar.record_btn.setEnabled(can_record or bar.recording)
+        self.toolbar.record_btn.setText("Save ep." if bar.recording else "Record")
+        self.toolbar.record_btn.setToolTip("" if bar.session else "Recording needs LeRobot: pip install -e .[record]")
+        self.status.set_dataset(str(bar.dataset_root) if bar.session and bar.session.recorder else None)
 
     def open_doctor(self) -> DoctorDialog:
         dialog = DoctorDialog(self.cfg, self.worker, self.jog_page.robot_view.model, self)
@@ -234,6 +262,8 @@ class MainWindow(QMainWindow):
         QApplication.instance().removeEventFilter(self.stop_filter)
         self.teleop_page.shutdown()
         self.worker.shutdown()  # sends stop, then disconnects
+        if self.episode_bar.session is not None and self.episode_bar.session.recorder is not None:
+            self.episode_bar.session.close()  # finalize, or LeRobot leaves an unreadable dataset
         self.cameras_page.stop_all()
         self.jog_page.robot_view.close_view()
         super().closeEvent(event)

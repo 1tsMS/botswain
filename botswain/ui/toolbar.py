@@ -64,7 +64,6 @@ class TopToolbar(QToolBar):
         self.stop_button = self._stop_button()
         self.addWidget(self.stop_button)
         self.record_btn.setEnabled(False)
-        self.record_btn.setToolTip("Recording comes in a later version")
         self.set_state(RobotState.disconnected(caps.dof), connected=False)
 
     # ---- building ----

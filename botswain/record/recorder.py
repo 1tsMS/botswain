@@ -69,6 +69,7 @@ class Recorder:
         self._clock = clock
         self.frames = 0
         self.task = ""
+        self.error: str | None = None
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -81,6 +82,7 @@ class Recorder:
             raise RuntimeError("an episode is already being recorded")
         self.task = task
         self.frames = 0
+        self.error = None
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="recorder", daemon=True)
         self._thread.start()
@@ -109,6 +111,13 @@ class Recorder:
             self._thread = None
 
     def _run(self) -> None:
+        try:
+            self._loop()
+        except Exception as e:
+            log.exception("recorder stopped")
+            self.error = f"{type(e).__name__}: {e}"
+
+    def _loop(self) -> None:
         period = 1.0 / self.fps
         start = self._clock()
         k = 0

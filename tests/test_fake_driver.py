@@ -131,7 +131,7 @@ def test_drop_link_reports_link_lost_and_refuses_commands(fake):
     assert not s.link_ok and s.feedback_hz == 0.0
     with pytest.raises(DriverError) as e:
         fake.jog_step("X", 1.0, "base")
-    assert e.value.code == -100
+    assert e.value.code == -101
 
 
 def test_stream_target_follows(fake):

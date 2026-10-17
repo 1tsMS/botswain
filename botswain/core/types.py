@@ -6,6 +6,7 @@ so states and commands can be handed between threads without copies or locks.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from enum import Enum
 
@@ -250,7 +251,14 @@ class Gripper:
     open: bool
 
 
+@dataclass(frozen=True)
+class Diagnose:
+    """Run the driver's Doctor checks on the worker thread (it owns the sockets); results go to reply()."""
+
+    reply: Callable[[list], None]
+
+
 Command = (
     Connect | Disconnect | Enable | Disable | ClearError | Stop | SetSpeed
-    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper
+    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | Diagnose
 )

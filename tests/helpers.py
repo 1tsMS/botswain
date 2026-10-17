@@ -61,3 +61,16 @@ def _spy(name: str):
 
 for _name in SPIED:
     setattr(SpyDriver, _name, _spy(_name))
+
+
+def dobot_cfg(ctrl, motion_port: int | None = None):
+    """dobot_cr5_fake.yaml pointed at a FakeDobotController on random ports."""
+    from dataclasses import replace
+
+    from botswain.core.config import load_robot_config
+
+    base = load_robot_config(ROBOTS / "dobot_cr5_fake.yaml")
+    p = ctrl.ports
+    conn = replace(base.connection, dashboard_port=p["dashboard"], motion_port=motion_port or p["dashboard"],
+                   feedback_port=p["feedback"], http_port=p["http"])
+    return replace(base, connection=conn)

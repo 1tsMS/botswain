@@ -22,6 +22,7 @@ from botswain.core.types import (
     ClearError,
     Command,
     Connect,
+    Diagnose,
     Disable,
     Disconnect,
     Enable,
@@ -36,7 +37,7 @@ from botswain.core.types import (
     Stop,
     StreamTarget,
 )
-from botswain.drivers.base import Driver, DriverError
+from botswain.drivers.base import Check, Driver, DriverError
 
 log = logging.getLogger(__name__)
 
@@ -216,6 +217,13 @@ class RobotWorker:
                 self._call("stream_target", d.stream_target, pose)
             case Gripper(open=is_open):
                 self._call("gripper", d.gripper, is_open)
+            case Diagnose(reply=reply):
+                try:
+                    checks = d.diagnose()
+                except Exception as e:
+                    log.exception("diagnose crashed")
+                    checks = [Check("Driver checks", "fail", f"{type(e).__name__}: {e}")]
+                reply(checks)
             case _:
                 self._log("error", f"worker has no handler for {cmd!r}")
 

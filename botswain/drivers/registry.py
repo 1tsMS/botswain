@@ -9,6 +9,7 @@ from botswain.drivers.base import Driver
 
 DRIVERS = {
     "fake": ("botswain.drivers.fake", "FakeDriver"),
+    "dobot_v4": ("botswain.drivers.dobot.driver", "DobotDriver"),
 }
 
 

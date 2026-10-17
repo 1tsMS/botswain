@@ -154,7 +154,8 @@ def state_text(state: RobotState, connected: bool) -> str:
         dot, text = C["red"], "No feedback"
     elif state.mode in (Mode.ERROR, Mode.COLLISION):
         n = len(state.errors)
-        dot, text = C["red"], f"{state.mode.value.capitalize()} · {n} alarm{'s' if n != 1 else ''}"
+        count = f" · {n} alarm{'s' if n != 1 else ''}" if n else ""
+        dot, text = C["red"], f"{state.mode.value.capitalize()}{count}"
     elif state.mode in ENABLED_MODES:
         dot, text = C["ok"], f"Enabled · {state.mode.value}"
     else:

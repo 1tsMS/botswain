@@ -16,6 +16,7 @@ from botswain.core.types import (
     ClearError,
     Command,
     Connect,
+    Diagnose,
     Disable,
     Disconnect,
     Enable,
@@ -48,7 +49,7 @@ class Rejected:
 Verdict = Allowed | Rejected
 
 # Commands that can't move the arm. Release/stop-type commands must always get through.
-NON_MOTION = (Connect, Disconnect, Enable, Disable, ClearError, Stop, JogTick, JogRelease)
+NON_MOTION = (Connect, Disconnect, Enable, Disable, ClearError, Stop, JogTick, JogRelease, Diagnose)
 
 # Modes each motion command may start from. Idle means idle: MOVING and JOGGING are not idle
 # (the old app treated "not error" as idle and re-sent moves on top of running ones).

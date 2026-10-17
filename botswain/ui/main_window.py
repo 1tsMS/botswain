@@ -10,6 +10,7 @@ from botswain.control.worker import RobotWorker
 from botswain.core.config import RobotConfig
 from botswain.core.types import ClearError, Connect, Disable, Disconnect, Enable, Mode, RobotState
 from botswain.ui.docks import LogDock, camera_dock
+from botswain.ui.doctor_dialog import DoctorDialog
 from botswain.ui.pages.jog_page import JogPage
 from botswain.ui.pages.placeholder_page import PlaceholderPage
 from botswain.ui.rail import PAGES, Rail
@@ -114,6 +115,7 @@ class MainWindow(QMainWindow):
     def _wire_toolbar(self) -> None:
         tb = self.toolbar
         tb.connect_clicked.connect(self._toggle_connect)
+        tb.doctor_clicked.connect(self.open_doctor)
         tb.enable_toggled.connect(lambda on: self.worker.submit(Enable() if on else Disable()))
         tb.clear_clicked.connect(lambda: self.worker.submit(ClearError()))
         tb.stop_button.pressed.connect(self.worker.request_stop)  # on press, not release: no time lost
@@ -126,7 +128,13 @@ class MainWindow(QMainWindow):
         self._connected = state.mode is not Mode.DISCONNECTED
         self.toolbar.set_state(state, self._connected)
         self.jog_page.set_state(state)
-        self.status.set_state(state, self.worker.gate.counts, self.jog_page.frame, None)
+        latency = getattr(self.worker.driver, "latency_ms", None) if self._connected else None
+        self.status.set_state(state, self.worker.gate.counts, self.jog_page.frame, latency)
+
+    def open_doctor(self) -> DoctorDialog:
+        dialog = DoctorDialog(self.cfg, self.worker, self.jog_page.robot_view.model, self)
+        dialog.show()
+        return dialog
 
     def closeEvent(self, event) -> None:
         QApplication.instance().removeEventFilter(self.stop_filter)

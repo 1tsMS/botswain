@@ -25,7 +25,7 @@ from botswain.core.types import (
     is_joint_axis,
     joint_index,
 )
-from botswain.drivers.base import Driver, DriverError
+from botswain.drivers.base import Check, Driver, DriverError
 
 ROT_SPEED_FACTOR = 0.5  # rx/ry/rz move at this many deg/s per mm/s of linear speed
 
@@ -196,14 +196,17 @@ class FakeDriver(Driver):
         with self._lock:
             self._gripper = 1.0 if open else 0.0
 
+    def diagnose(self) -> list[Check]:
+        return [Check("Driver", "ok", "fake robot, no hardware to check")]
+
     # ---- internals (call with the lock held) ----
 
     def _command(self) -> None:
         # Latency is outside the lock, like a network round trip that doesn't freeze the feedback.
         if self._mode is Mode.DISCONNECTED:
-            raise DriverError(-100, "not connected", "press Connect")
+            raise DriverError(-101, "not connected", "press Connect")
         if not self._link_ok:
-            raise DriverError(-100, "link lost", "check the cable")
+            raise DriverError(-101, "link lost", "check the cable")
         self._wait_latency()
 
     def _wait_latency(self) -> None:
@@ -243,9 +246,9 @@ class FakeDriver(Driver):
             self._joints_target = self._joints.copy()
             return
 
-        self._tcp[:3] = _step_toward(self._tcp[:3], self._tcp_target[:3], lin)
-        self._tcp[3:] = _step_toward(self._tcp[3:], self._tcp_target[3:], rot)
-        self._joints = _step_toward(self._joints, self._joints_target, jnt)
+        self._tcp[:3] = step_toward(self._tcp[:3], self._tcp_target[:3], lin)
+        self._tcp[3:] = step_toward(self._tcp[3:], self._tcp_target[3:], rot)
+        self._joints = step_toward(self._joints, self._joints_target, jnt)
         arrived = np.array_equal(self._tcp, self._tcp_target) and np.array_equal(self._joints, self._joints_target)
         if arrived and self._mode is Mode.MOVING:
             self._mode = Mode.IDLE
@@ -259,7 +262,7 @@ class FakeDriver(Driver):
             self._window_start_ns = now
 
 
-def _step_toward(cur: np.ndarray, target: np.ndarray, max_step: float) -> np.ndarray:
+def step_toward(cur: np.ndarray, target: np.ndarray, max_step: float) -> np.ndarray:
     """Straight line from cur toward target, at most max_step long. Lands exactly on the target."""
     d = target - cur
     dist = float(np.linalg.norm(d))

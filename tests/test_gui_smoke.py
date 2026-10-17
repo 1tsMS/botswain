@@ -123,3 +123,39 @@ def test_3d_view_builds(qtbot, make_window):
     worker.submit(JogStep("J1", 2.0))  # fake joints move 3 deg/s at 10 % speed
     qtbot.waitUntil(lambda: view._last_joints is not None and abs(view._last_joints[0] - 2.0) < 1e-6,
                     timeout=3000)
+
+
+def test_doctor_dialog_fills_table(qtbot, make_window):
+    _, w = make_window()
+    dialog = w.open_doctor()
+    qtbot.addWidget(dialog)
+    qtbot.waitUntil(lambda: dialog.table.rowCount() >= 1, timeout=3000)  # fake, offline: one check
+    assert all(row[1] == "OK" for row in dialog.rows())
+
+
+def test_app_drives_fake_dobot_controller(qtbot, make_window):
+    from helpers import dobot_cfg
+
+    from botswain.drivers.dobot.fake_controller import FakeDobotController
+
+    ctrl = FakeDobotController()
+    ctrl.start()
+    try:
+        worker, w = make_window(dobot_cfg(ctrl))
+        w.toolbar.connect_btn.click()
+        qtbot.waitUntil(lambda: worker.latest_state().link_ok, timeout=3000)
+        assert worker.latest_state().mode is Mode.DISABLED
+        qtbot.waitUntil(w.toolbar.enable_btn.isEnabled, timeout=1000)  # GUI catches up at 30 Hz
+        w.toolbar.enable_btn.click()
+        qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.IDLE, timeout=3000)
+        x0 = worker.latest_state().tcp.x
+        worker.submit(JogStep("X", 2.0))
+        qtbot.waitUntil(lambda: abs(worker.latest_state().tcp.x - x0 - 2.0) < 1e-3, timeout=3000)
+        dialog = w.open_doctor()
+        qtbot.addWidget(dialog)
+        qtbot.waitUntil(lambda: dialog.table.rowCount() >= 9, timeout=5000)
+        assert "Disconnect" == w.toolbar.connect_btn.text()
+        w.close()
+        assert ctrl.commands[-2:] == ["MoveJog()", "Stop()"]
+    finally:
+        ctrl.stop()

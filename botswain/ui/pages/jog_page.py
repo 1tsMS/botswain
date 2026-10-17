@@ -2,11 +2,28 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from collections.abc import Callable
+
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QWidget
 
+from botswain.control.safety import not_ready_reason
 from botswain.core.config import RobotConfig
-from botswain.core.types import Capabilities, RobotState
+from botswain.core.types import (
+    Capabilities,
+    Command,
+    Gripper,
+    JogHold,
+    JogRelease,
+    JogStep,
+    JogTick,
+    Mode,
+    MoveTo,
+    Pose,
+    RobotState,
+    SetSpeed,
+    is_joint_axis,
+)
 from botswain.ui.theme import set_role
 from botswain.ui.widgets.jog_pad import JogPad, StepSelector
 from botswain.ui.widgets.panel import Panel
@@ -14,11 +31,17 @@ from botswain.ui.widgets.pose_fields import PoseFields
 from botswain.ui.widgets.robot_view import RobotView
 from botswain.ui.widgets.speed_control import SpeedControl
 
+JOG_MODES = frozenset({Mode.IDLE, Mode.JOGGING})  # keys stay live during a hold-jog, greyed otherwise
+TICK_MS = 50  # "still held" heartbeat; the worker releases the jog after 150 ms without one
+
 
 class JogPage(QWidget):
-    def __init__(self, cfg: RobotConfig, caps: Capabilities, view_3d: bool = True,
-                 parent: QWidget | None = None) -> None:
+    def __init__(self, cfg: RobotConfig, caps: Capabilities, submit: Callable[[Command], None],
+                 log: Callable[[str, str], None], view_3d: bool = True, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._submit = submit
+        self._log = log
+        self._state: RobotState | None = None
         grid = QGridLayout(self)
         grid.setContentsMargins(8, 8, 8, 8)
         grid.setSpacing(8)
@@ -78,6 +101,18 @@ class JogPage(QWidget):
         self.view.body_layout.setContentsMargins(6, 6, 6, 6)
         self.view.body_layout.addWidget(self.robot_view, 1)
 
+        self._hold_timer = QTimer(self)
+        self._hold_timer.setInterval(TICK_MS)
+        self._hold_timer.timeout.connect(lambda: self._submit(JogTick()))
+        self.jog_pad.step.connect(self._step)
+        self.jog_pad.hold_start.connect(self._hold_start)
+        self.jog_pad.hold_end.connect(self._hold_end)
+        self.speed_control.changed.connect(lambda pct: self._submit(SetSpeed(pct)))
+        self.gripper_open_btn.clicked.connect(lambda: self._submit(Gripper(True)))
+        self.gripper_close_btn.clicked.connect(lambda: self._submit(Gripper(False)))
+        self.copy_btn.clicked.connect(self._copy_current)
+        self.move_btn.clicked.connect(self._move_to_target)
+
         grid.addWidget(self.orientation, 0, 0, 2, 1)
         grid.addWidget(self.control, 0, 1)
         grid.addWidget(self.speed, 1, 1)
@@ -98,7 +133,44 @@ class JogPage(QWidget):
     def frame(self) -> str:
         return self.frame_box.currentData()
 
+    # ---- operator actions -> commands (all go through the worker and the gate) ----
+
+    def _frame_for(self, axis: str) -> str:
+        return "base" if is_joint_axis(axis) else self.frame
+
+    def _step(self, axis: str, sign: int) -> None:
+        self._submit(JogStep(axis, sign * self.jog_pad.step_size, self._frame_for(axis)))
+
+    def _hold_start(self, axis: str, sign: int) -> None:
+        self._submit(JogHold(axis, sign, self._frame_for(axis)))
+        self._hold_timer.start()
+
+    def _hold_end(self) -> None:
+        self._hold_timer.stop()
+        self._submit(JogRelease())
+
+    def _copy_current(self) -> None:
+        if self._state is not None:
+            self.pose_fields.copy_from(self._state)
+
+    def _move_to_target(self) -> None:
+        try:
+            target = self.pose_fields.target()
+        except ValueError as e:
+            self._log("error", f"Move to target: {e}")
+            return
+        self._submit(MoveTo(target, "linear" if isinstance(target, Pose) else "joint"))
+
     def set_state(self, state: RobotState) -> None:
+        self._state = state
+        reason = not_ready_reason(state, JOG_MODES)
+        self.jog_pad.set_blocked(reason)
+        move_reason = not_ready_reason(state, frozenset({Mode.IDLE}))
+        self.move_btn.setEnabled(move_reason is None)
+        self.move_btn.setToolTip(move_reason or "")
+        live = state.link_ok and state.mode is not Mode.DISCONNECTED
+        for b in (self.gripper_open_btn, self.gripper_close_btn):
+            b.setEnabled(live)
         self.pose_fields.set_state(state)
         self.speed_control.set_value(state.speed_pct)
         self.robot_view.set_joints(state.joints.values)

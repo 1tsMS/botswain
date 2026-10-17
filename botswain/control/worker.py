@@ -73,6 +73,7 @@ class RobotWorker:
         self._state_lock = threading.Lock()
         self._connected = False
         self._hold_tick_ns: int | None = None  # last "still held" time while a hold-jog runs, else None
+        self._hold_cmd: JogHold | None = None
         self._next_publish_ns = 0
         self._last_rule_log_ns: dict[str, int] = {}
 
@@ -146,7 +147,7 @@ class RobotWorker:
                 break
             self._handle(cmd, state)
             state = self._read_state()  # the next command must see what this one changed
-        self._watchdog()
+        self._watchdog(state)
         self._publish(state)
 
     def _handle_stop(self) -> None:
@@ -206,6 +207,7 @@ class RobotWorker:
             case JogHold(axis=axis, direction=direction, frame=frame):
                 if self._call("jog_hold", d.jog_hold, axis, direction, frame):
                     self._hold_tick_ns = now_ns()
+                    self._hold_cmd = cmd
             case JogRelease():
                 # Always sent, even if we think no hold is active: a release that does nothing is harmless.
                 self._hold_tick_ns = None
@@ -227,12 +229,21 @@ class RobotWorker:
             case _:
                 self._log("error", f"worker has no handler for {cmd!r}")
 
-    def _watchdog(self) -> None:
-        if self._hold_tick_ns is None or now_ns() - self._hold_tick_ns <= HOLD_TIMEOUT_NS:
+    def _watchdog(self, state: RobotState) -> None:
+        """Release a hold-jog when the GUI stops ticking (frozen, crashed) or the arm reaches a limit."""
+        if self._hold_tick_ns is None:
             return
-        self._hold_tick_ns = None
-        self._log("warn", "hold-jog released by watchdog: no 'still held' tick for 150 ms")
-        self._call("jog_release", self.driver.jog_release)
+        if now_ns() - self._hold_tick_ns > HOLD_TIMEOUT_NS:
+            self._hold_tick_ns = None
+            self._log("warn", "hold-jog released by watchdog: no 'still held' tick for 150 ms")
+            self._call("jog_release", self.driver.jog_release)
+            return
+        why = self.gate.hold_violation(self._hold_cmd, state) if self._hold_cmd is not None else None
+        if why is not None:
+            self._hold_tick_ns = None
+            self.gate.counts[why[0]] = self.gate.counts.get(why[0], 0) + 1
+            self._log("warn", f"hold-jog released ({why[0]}): {why[1]}")
+            self._call("jog_release", self.driver.jog_release)
 
     def _read_state(self) -> RobotState:
         try:

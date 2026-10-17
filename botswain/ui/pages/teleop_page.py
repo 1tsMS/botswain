@@ -49,7 +49,7 @@ class TeleopPage(QWidget):
         self.url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.status_label = set_role(QLabel(""), "lab")
         notes = set_role(QLabel(
-            "Android Chrome with ARCore (Oppo K13 works). Same WiFi as this laptop. Accept the certificate warning, "
+            "Android Chrome on a phone with ARCore. Same WiFi as this laptop. Accept the certificate warning, "
             "then start AR. Hold the on-screen button to move; let go to stop. Windows Firewall must allow inbound "
             f"TCP {PORT} (add the rule yourself)."), "lab")
         notes.setWordWrap(True)

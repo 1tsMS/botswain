@@ -26,7 +26,8 @@ from botswain.core.types import (
 @pytest.fixture
 def gate():
     cfg = load_robot_config(ROBOTS / "dobot_cr5.yaml")
-    return SafetyGate(cfg.limits, cfg.stream.period_s)
+    from dataclasses import replace
+    return SafetyGate(replace(cfg.limits, speed_cap_pct=20), cfg.stream.period_s)
 
 
 @pytest.mark.parametrize("mode", [Mode.DISABLED, Mode.ERROR, Mode.COLLISION, Mode.MOVING, Mode.JOGGING,

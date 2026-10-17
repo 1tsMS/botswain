@@ -1,16 +1,13 @@
-"""Speed control like the old app: -1/-5/-15/-25 left, slider in the middle, +1..+25 right.
-
-The slider only goes up to the YAML speed cap, so what you see is what the robot can get.
-"""
+"""Speed control, compact: -25 -5 -1 [slider] +1 +5 +25 and the value. Range 1..speed cap (YAML)."""
 
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from botswain.ui.theme import set_role
 
-DELTAS = (1, 5, 15, 25)
+DELTAS = (25, 5, 1)
 
 
 class SpeedControl(QWidget):
@@ -21,10 +18,11 @@ class SpeedControl(QWidget):
         self.cap_pct = cap_pct
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(10)
+        lay.setSpacing(8)
 
         top = QHBoxLayout()
-        top.addWidget(set_role(QLabel(f"of max speed (cap {cap_pct}%)"), "lab"))
+        cap = "" if cap_pct >= 100 else f" (cap {cap_pct}%)"
+        top.addWidget(set_role(QLabel(f"of max speed{cap}"), "lab"))
         top.addStretch(1)
         self.value_label = QLabel("–")
         self.value_label.setObjectName("speedValue")
@@ -32,25 +30,28 @@ class SpeedControl(QWidget):
         top.addWidget(self.value_label)
         lay.addLayout(top)
 
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(8)
-        grid.setVerticalSpacing(4)
-        grid.setColumnStretch(1, 1)
+        row = QHBoxLayout()
+        row.setSpacing(4)
         self.slider = QSlider(Qt.Orientation.Horizontal)
         self.slider.setRange(1, cap_pct)
         self.slider.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.slider.sliderReleased.connect(lambda: self._emit(self.slider.value()))
         self.slider.valueChanged.connect(lambda v: self.value_label.setText(f"{v}%"))
-        grid.addWidget(self.slider, 0, 1, len(DELTAS), 1)
-        for row, d in enumerate(DELTAS):
-            for col, sign in ((0, -1), (2, 1)):
-                b = set_role(QPushButton(f"{'−' if sign < 0 else '+'}{d}"), "key")
-                b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-                b.setFixedWidth(52)
-                b.setMinimumHeight(26)
-                b.clicked.connect(lambda _=False, delta=sign * d: self._emit(self.slider.value() + delta))
-                grid.addWidget(b, row, col)
-        lay.addLayout(grid)
+        for d in DELTAS:
+            row.addWidget(self._button(-d))
+        row.addSpacing(6)
+        row.addWidget(self.slider, 1)
+        row.addSpacing(6)
+        for d in reversed(DELTAS):
+            row.addWidget(self._button(d))
+        lay.addLayout(row)
+
+    def _button(self, delta: int) -> QPushButton:
+        b = set_role(QPushButton(f"{'−' if delta < 0 else '+'}{abs(delta)}"), "key")
+        b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        b.setFixedWidth(44)
+        b.clicked.connect(lambda _=False: self._emit(self.slider.value() + delta))
+        return b
 
     def set_value(self, pct: int) -> None:
         """Show the robot's speed. Ignored while the operator drags the slider."""

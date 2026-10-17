@@ -84,6 +84,7 @@ def test_fields_read_only_until_edit_target(qtbot, make_window):
 def test_hidden_when_not_capable(tmp_path, make_window):
     data = yaml.safe_load((ROBOTS / "fake.yaml").read_text(encoding="utf-8"))
     data.pop("gripper")
+    data["model"]["urdf"] = str(ROBOTS.parent / "assets" / "dobot_cr5" / "cr5_robot.urdf")
     path = tmp_path / "no_gripper.yaml"
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     _, w = make_window(load_robot_config(path))

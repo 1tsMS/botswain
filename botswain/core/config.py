@@ -39,6 +39,7 @@ class LimitsCfg:
     max_step_deg: float
     teleport_mm: float
     stale_ms: float
+    box_enabled: bool = False  # the GUI can switch the box on and off at runtime
 
 
 @dataclass(frozen=True)
@@ -136,7 +137,10 @@ def _limits(d: dict) -> LimitsCfg:
             unknown = sorted(set(d) - set(LIMIT_KEYS))
             extra = f" (unknown keys here: {', '.join(unknown)}; typo?)" if unknown else ""
             raise ConfigError(w + key, "missing, every limit must be set" + extra)
-    _no_unknown_keys(d, set(LIMIT_KEYS), w)
+    _no_unknown_keys(d, {*LIMIT_KEYS, "box_enabled"}, w)
+    box_enabled = d.get("box_enabled", False)
+    if not isinstance(box_enabled, bool):
+        raise ConfigError(w + "box_enabled", "must be true or false")
 
     cap = _number(d, "speed_cap_pct", w, integer=True)
     if not 1 <= cap <= 100:
@@ -162,6 +166,7 @@ def _limits(d: dict) -> LimitsCfg:
         max_step_deg=_number(d, "max_step_deg", w),
         teleport_mm=_number(d, "teleport_mm", w),
         stale_ms=_number(d, "stale_ms", w),
+        box_enabled=box_enabled,
     )
 
 

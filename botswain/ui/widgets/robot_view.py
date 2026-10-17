@@ -11,7 +11,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from botswain.core.types import Pose
@@ -44,9 +44,15 @@ class RobotModel:
 
 
 class RobotView(QWidget):
+    box_toggled = Signal(bool)
+
     def __init__(self, urdf: Path | None, box_mm: tuple[tuple[float, float], ...] | None = None,
-                 parent: QWidget | None = None) -> None:
+                 gripper: bool = False, box_on: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._show_gripper = gripper
+        self._gripper_actors: list = []
+        self._gripper_open = 1.0
+        self._flange = np.eye(4)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(6)
@@ -54,7 +60,17 @@ class RobotView(QWidget):
         chips.setSpacing(4)
         self.box_chip = self._chip("Safety box", chips)
         self.target_chip = self._chip("Target", chips)
+        self.box_chip.setChecked(box_on)
+        self.box_chip.setToolTip("Show and enforce the workspace box from the robot YAML")
         chips.addStretch(1)
+        self.reset_btn = set_role(QPushButton("Reset view"), "chip")
+        self.reset_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.reset_btn.clicked.connect(self.reset_view)
+        chips.addWidget(self.reset_btn)
+        # Hooked up before the 3D scene: the box toggle must work even without a 3D view.
+        self.box_chip.toggled.connect(lambda on: self._set_visible(self._box_actor, on))
+        self.box_chip.toggled.connect(self.box_toggled.emit)
+        self.target_chip.toggled.connect(lambda on: self._set_visible(self._target_actor, on))
         lay.addLayout(chips)
 
         self.model: RobotModel | None = None
@@ -73,8 +89,6 @@ class RobotView(QWidget):
         except Exception as e:
             log.exception("3D view failed")
             lay.addWidget(self._message(f"3D view failed: {e}"), 1)
-        self.box_chip.toggled.connect(lambda on: self._set_visible(self._box_actor, on))
-        self.target_chip.toggled.connect(lambda on: self._set_visible(self._target_actor, on))
 
     def _chip(self, text: str, row: QHBoxLayout) -> QPushButton:
         b = set_role(QPushButton(text), "chip")
@@ -106,13 +120,44 @@ class RobotView(QWidget):
             bounds = [v / 1000.0 for axis in box_mm for v in axis]
             self._box_actor = self.plotter.add_mesh(pv.Box(bounds=bounds), style="wireframe", color=C["dim"],
                                                     line_width=1.5)
+            self._box_actor.SetVisibility(self.box_chip.isChecked())
         self._target_actor = self.plotter.add_mesh(pv.Sphere(radius=0.012), color=C["sel"])
         self._target_actor.SetVisibility(False)
+        if self._show_gripper:
+            # Simple stand-in (the URDF has no gripper): a palm and two fingers on the flange.
+            palm = pv.Box(bounds=(-0.03, 0.03, -0.02, 0.02, 0.0, 0.035))
+            finger = pv.Box(bounds=(-0.005, 0.005, -0.012, 0.012, 0.035, 0.085))
+            self._gripper_actors = [self.plotter.add_mesh(m, color=C["ink"]) for m in (palm, finger, finger.copy())]
         self.plotter.add_axes()
-        self.plotter.view_isometric()
+        self.plotter.enable_terrain_style(mouse_wheel_zooms=True)  # orbit about the vertical axis, never roll
         self.set_joints([0.0] * len(self.model.joint_names))
-        self.plotter.reset_camera()
+        self.reset_view()
         lay.addWidget(self.plotter, 1)
+
+    def reset_view(self) -> None:
+        if self.plotter is None:
+            return
+        self.plotter.camera_position = [(1.7, -1.7, 1.3), (0.0, 0.0, 0.35), (0.0, 0.0, 1.0)]
+        self.plotter.render()
+
+    def set_gripper(self, opening: float | None) -> None:
+        opening = 1.0 if opening is None else float(opening)
+        if opening != self._gripper_open:
+            self._gripper_open = opening
+            self._place_gripper()
+            if self.plotter is not None:
+                self.plotter.render()
+
+    def _place_gripper(self) -> None:
+        if not self._gripper_actors:
+            return
+        palm, left, right = self._gripper_actors
+        palm.user_matrix = self._flange
+        gap = 0.006 + 0.022 * self._gripper_open
+        for actor, side in ((left, -1.0), (right, 1.0)):
+            offset = np.eye(4)
+            offset[0, 3] = side * gap
+            actor.user_matrix = self._flange @ offset
 
     def set_joints(self, joints_deg: Sequence[float]) -> None:
         if self.model is None or self.plotter is None:
@@ -123,6 +168,8 @@ class RobotView(QWidget):
         self._last_joints = q
         for node, T in self.model.transforms(q).items():
             self._actors[node].user_matrix = T
+        self._flange = np.array(self.model.urdf.get_transform("Link6"))
+        self._place_gripper()
         self.plotter.render()
 
     def set_target(self, pose: Pose | None) -> None:

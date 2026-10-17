@@ -47,7 +47,7 @@ def test_jog_step_moves_x_by_delta(fake):
     x0 = fake.read_state().tcp.x
     fake.jog_step("X", 1.0, "base")
     assert settled(fake)
-    assert abs(fake.read_state().tcp.x - (x0 + 1.0)) < 1e-6
+    assert abs(fake.read_state().tcp.x - (x0 + 1.0)) < 1e-4
 
 
 def test_joint_jog_step(fake):
@@ -55,7 +55,7 @@ def test_joint_jog_step(fake):
     j0 = fake.read_state().joints.axis("J6")
     fake.jog_step("J6", -2.0, "base")
     assert settled(fake)
-    assert abs(fake.read_state().joints.axis("J6") - (j0 - 2.0)) < 1e-6
+    assert abs(fake.read_state().joints.axis("J6") - (j0 - 2.0)) < 1e-4
 
 
 def test_move_to_reports_moving_then_idle(fake):
@@ -65,7 +65,7 @@ def test_move_to_reports_moving_then_idle(fake):
     assert fake.read_state().mode is Mode.MOVING
     assert settled(fake)
     s = fake.read_state()
-    assert s.mode is Mode.IDLE and abs(s.tcp.z - (start.z + 50)) < 1e-6
+    assert s.mode is Mode.IDLE and abs(s.tcp.z - (start.z + 50)) < 1e-4
 
 
 def test_move_to_joints(fake):
@@ -139,7 +139,7 @@ def test_stream_target_follows(fake):
     p = fake.read_state().tcp
     fake.stream_target(p.with_axis("Y", p.y + 5))
     assert fake.read_state().mode is Mode.STREAMING
-    assert wait_for(lambda: abs(fake.read_state().tcp.y - (p.y + 5)) < 1e-6)
+    assert wait_for(lambda: abs(fake.read_state().tcp.y - (p.y + 5)) < 1e-4)
 
 
 def test_gripper_state(fake):

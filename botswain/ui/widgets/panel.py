@@ -45,6 +45,9 @@ class Panel(QFrame):
 
     def set_collapsed(self, collapsed: bool) -> None:
         self.body.setVisible(not collapsed)
+        policy = self.sizePolicy()
+        policy.setVerticalPolicy(policy.Policy.Maximum if collapsed else policy.Policy.Preferred)
+        self.setSizePolicy(policy)
         self._title_btn.setText(("▶  " if collapsed else "▼  ") + self.title)
 
     def set_meta(self, text: str) -> None:

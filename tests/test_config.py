@@ -17,7 +17,7 @@ def write_variant(tmp_path, change):
 def test_config_loads_cr5():
     cfg = load_robot_config(ROBOTS / "dobot_cr5.yaml")
     assert cfg.limits.box_mm[0] == (-632, -332)
-    assert cfg.limits.speed_cap_pct == 20
+    assert cfg.limits.speed_cap_pct == 100 and cfg.limits.box_enabled is False
     assert cfg.dof == 6
     assert cfg.connection.ip == "192.168.5.1"
     assert cfg.model_urdf.is_absolute() and cfg.model_urdf.name == "cr5_robot.urdf"

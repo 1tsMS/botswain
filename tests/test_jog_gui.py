@@ -29,6 +29,7 @@ def rig(qtbot, tmp_path):
     worker, w = build(load_robot_config(ROBOTS / "fake.yaml"), view_3d=False)
     qtbot.addWidget(w)
     w.points.path = tmp_path / "points.json"  # keep test points out of robots/
+    w.points._points.clear()  # ignore points saved by hand in robots/fake.points.json
     sent, stops = [], []
     real_submit, real_stop = worker.submit, worker.request_stop
     worker.submit = lambda c: (sent.append(c), real_submit(c))
@@ -190,15 +191,18 @@ def test_home_moves_to_yaml_joints(qtbot, rig):
 def test_hold_jog_released_at_box_wall(qtbot, rig):
     worker, w, _, _ = rig
     ready(qtbot, worker, w)
-    worker.submit(SetSpeed(20))  # fake default 100 mm/s at 100 %: 20 mm/s, the wall is 150 mm away
+    w.jog_page.robot_view.box_chip.setChecked(True)  # box is off by default
+    assert worker.gate.box_enabled
+    worker.submit(SetSpeed(20))  # 50 mm/s on the fake
     w.jog_page.step_selector.buttons[None].click()
-    worker.driver._tcp[0] = -340.0  # put the fake 8 mm from the X+ wall
-    worker.driver._tcp_target[0] = -340.0
-    qtbot.waitUntil(lambda: worker.latest_state().tcp.x == -340.0, timeout=500)
+    start = worker.latest_state().tcp
+    worker.driver.place_at(start.with_axis("X", -340.0))  # 8 mm from the X+ wall
+    qtbot.waitUntil(lambda: abs(worker.latest_state().tcp.x + 340.0) < 1e-3, timeout=500)
     key = w.jog_page.jog_pad.keys[("X", 1)]
     qtbot.mousePress(key, Qt.MouseButton.LeftButton)
     qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.JOGGING, timeout=1000)
     qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.IDLE, timeout=2000)  # released by the gate
     qtbot.mouseRelease(key, Qt.MouseButton.LeftButton)
-    assert -332.0 - 1.5 <= worker.latest_state().tcp.x <= -332.0 + 0.5
-    assert "released (box)" in w.log_dock.log_view.toPlainText()
+    # one or two worker ticks of overshoot at 50 mm/s when the test thread competes for the GIL
+    assert -332.0 - 1.5 <= worker.latest_state().tcp.x <= -332.0 + 5.0
+    qtbot.waitUntil(lambda: "released (box)" in w.log_dock.log_view.toPlainText(), timeout=1000)

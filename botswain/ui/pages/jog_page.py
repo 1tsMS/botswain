@@ -48,6 +48,7 @@ class JogPage(QWidget):
         for col, stretch in enumerate((20, 21, 20)):
             grid.setColumnStretch(col, stretch)
         grid.setRowStretch(0, 1)
+        grid.setRowStretch(1, 0)
 
         # Orientation: frame, live pose + joints, target buttons.
         self.orientation = Panel("Orientation", "live")
@@ -81,13 +82,13 @@ class JogPage(QWidget):
         self.jog_pad = JogPad(caps.dof)
         self.step_selector.changed.connect(self.jog_pad.set_step_size)
         self.control.body_layout.addWidget(self.jog_pad)
-        self.control.body_layout.addStretch(1)
         gripper_row = QHBoxLayout()
         self.gripper_open_btn = self._button("Gripper open", "btn")
         self.gripper_close_btn = self._button("Gripper close", "btn")
         gripper_row.addWidget(self.gripper_open_btn)
         gripper_row.addWidget(self.gripper_close_btn)
         self.control.body_layout.addLayout(gripper_row)
+        self.control.body_layout.addStretch(1)
         for b in (self.gripper_open_btn, self.gripper_close_btn):
             b.setVisible(caps.gripper)
 
@@ -97,7 +98,8 @@ class JogPage(QWidget):
 
         urdf = cfg.model_urdf
         self.view = Panel("Robot view", urdf.name if urdf else "")
-        self.robot_view = RobotView(urdf if view_3d else None, cfg.limits.box_mm)
+        self.robot_view = RobotView(urdf if view_3d else None, cfg.limits.box_mm, gripper=caps.gripper,
+                                    box_on=cfg.limits.box_enabled)
         self.view.body_layout.setContentsMargins(6, 6, 6, 6)
         self.view.body_layout.addWidget(self.robot_view, 1)
 
@@ -174,4 +176,5 @@ class JogPage(QWidget):
         self.pose_fields.set_state(state)
         self.speed_control.set_value(state.speed_pct)
         self.robot_view.set_joints(state.joints.values)
+        self.robot_view.set_gripper(state.gripper)
         self.robot_view.set_target(state.tcp_target if state.tcp_target != state.tcp else None)

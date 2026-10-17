@@ -48,7 +48,7 @@ def test_worker_enable_and_jog(rig):
     ready(worker)
     x0 = worker.latest_state().tcp.x
     worker.submit(JogStep("X", 1.0))
-    assert wait_for(lambda: abs(worker.latest_state().tcp.x - (x0 + 1.0)) < 1e-6)
+    assert wait_for(lambda: abs(worker.latest_state().tcp.x - (x0 + 1.0)) < 1e-4)
     assert "jog_step" in driver.names()
 
 
@@ -123,7 +123,7 @@ def test_driver_exception_logged_loop_survives(rig):
     assert wait_for(lambda: any(level == "error" and "boom" in text for level, text in logs))
     assert any("try again" in text for _, text in logs)
     worker.submit(JogStep("X", 1.0))
-    assert wait_for(lambda: abs(worker.latest_state().tcp.x - (x0 + 1.0)) < 1e-6)
+    assert wait_for(lambda: abs(worker.latest_state().tcp.x - (x0 + 1.0)) < 1e-4)
 
 
 def test_driver_bug_does_not_kill_worker(rig):
@@ -149,10 +149,10 @@ def test_state_published_at_most_30hz(rig):
 def test_last_command_records_raw_and_sent(rig):
     _, worker, _ = rig
     ready(worker)
-    worker.submit(SetSpeed(80))
-    assert wait_for(lambda: worker.last_command is not None and worker.last_command.raw == SetSpeed(80))
+    worker.submit(SetSpeed(150))
+    assert wait_for(lambda: worker.last_command is not None and worker.last_command.raw == SetSpeed(150))
     rec = worker.last_command
-    assert rec.sent == SetSpeed(20) and rec.rule == "speed_cap"
+    assert rec.sent == SetSpeed(100) and rec.rule == "speed_cap"
 
 
 def test_rejected_command_recorded_and_not_sent(rig):

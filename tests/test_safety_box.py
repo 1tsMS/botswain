@@ -11,7 +11,9 @@ from botswain.core.types import JogHold, JogStep, Joints, Mode, MoveTo, Pose
 @pytest.fixture
 def gate():
     cfg = load_robot_config(ROBOTS / "dobot_cr5.yaml")  # box x [-632, -332], y [-286, 14], z [334, 634]
-    return SafetyGate(cfg.limits, cfg.stream.period_s)
+    g = SafetyGate(cfg.limits, cfg.stream.period_s)
+    g.box_enabled = True
+    return g
 
 
 def at(x=-482.0, y=-136.0, z=484.0, rpy=(180.0, 0.0, 0.0), joints=(0, 0, 90, 0, -90, 0)):
@@ -70,3 +72,10 @@ def test_hold_violation_uses_margin_while_running(gate):
     assert gate.hold_violation(JogHold("X", 1), at(x=-332.5)) is not None  # within 1 mm of the wall
     assert gate.hold_violation(JogHold("X", 1), at(x=-340.0)) is None
     assert gate.hold_violation(JogHold("X", 1, "tool"), at(x=-300.0))[0] == "box"
+
+
+def test_box_off_lets_everything_through(gate):
+    gate.box_enabled = False
+    assert gate.check(JogStep("X", 5.0), at(x=-332.0)) == Allowed(JogStep("X", 5.0))
+    assert isinstance(gate.check(MoveTo(Pose(-482, -136, 700, 180, 0, 0), "linear"), at()), Allowed)
+    assert gate.check(JogStep("J3", 5.0), at(joints=(0, 0, 160, 0, -90, 0))).rule == "joint_limit"  # always on

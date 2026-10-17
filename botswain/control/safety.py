@@ -92,6 +92,7 @@ class SafetyGate:
         self.limits = limits
         self.period_s = period_s
         self.counts: dict[str, int] = {}
+        self.box_enabled = limits.box_enabled  # switched from the GUI; joint limits are always on
         self._last_sent: Pose | None = None  # last streamed target that went to the robot
         self._last_raw: np.ndarray | None = None  # last streamed input position (for the teleport guard)
 
@@ -164,6 +165,8 @@ class SafetyGate:
         return Allowed(replace(cmd, pose=target), tuple(rules))
 
     def _clamp_box(self, pose: Pose) -> tuple[Pose, bool]:
+        if not self.box_enabled:
+            return pose, False
         xyz = [min(max(v, lo), hi) for v, (lo, hi) in zip(pose.xyz, self.limits.box_mm, strict=True)]
         if xyz == list(pose.xyz):
             return pose, False
@@ -185,7 +188,7 @@ class SafetyGate:
                 return Allowed(replace(cmd, delta=target - cur), ("joint_limit",))
             return Allowed(cmd)
         i = cart_index(cmd.axis)
-        if i >= 3:
+        if i >= 3 or not self.box_enabled:
             return Allowed(cmd)  # rotating about the TCP does not move the TCP
         d = np.zeros(3)
         d[i] = cmd.delta
@@ -207,6 +210,8 @@ class SafetyGate:
     def _move_to(self, cmd: MoveTo) -> Verdict:
         """Never silently go somewhere else: a target outside the limits is rejected with the reason."""
         if isinstance(cmd.target, Pose):
+            if not self.box_enabled:
+                return Allowed(cmd)
             for axis, v, (lo, hi) in zip("XYZ", cmd.target.xyz, self.limits.box_mm, strict=True):
                 if not lo <= v <= hi:
                     return Rejected("box", f"target {axis} {v:.1f} mm is outside the safety box [{lo:g}, {hi:g}]")
@@ -236,7 +241,7 @@ class SafetyGate:
                 return ("joint_limit", f"{cmd.axis} reached its limit")
             return None
         i = cart_index(cmd.axis)
-        if i >= 3:
+        if i >= 3 or not self.box_enabled:
             return None
         xyz = np.array(state.tcp.xyz)
         if cmd.frame == "base":

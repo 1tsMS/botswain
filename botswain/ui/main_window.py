@@ -6,7 +6,7 @@ import time
 
 from PySide6.QtCore import QEvent, QObject, Qt
 from PySide6.QtGui import QAction, QKeyEvent
-from PySide6.QtWidgets import QApplication, QLabel, QMainWindow, QStackedWidget, QWidget
+from PySide6.QtWidgets import QApplication, QFrame, QLabel, QMainWindow, QScrollArea, QStackedWidget, QWidget
 
 from botswain.control.points import PointStore
 from botswain.control.worker import RobotWorker
@@ -76,25 +76,28 @@ class MainWindow(QMainWindow):
         self.stack.setObjectName("workspace")
         self.jog_page = JogPage(cfg, caps, self._submit, self._log, view_3d=view_3d)
         self.points = self._load_points(cfg)
-        self.points_page = PointsView(self.points, self._submit, self._log)
+        self.points_page = PointsView(self.points, self._submit, self._log, save=self._save_point)
         self.teleop_page = TeleopPage(worker, self._log)
         self.cameras_page = CamerasPage(self._log)
         notes = {"Script": "coming later", "Blocks": "coming later",
                  "Teleop": "phone teleop comes in T5", "Cameras": "cameras come in T5",
                  "Settings": f"robot settings live in {cfg.path.name}"}
         self.pages: dict[str, QWidget] = {}
+        self._stack_items: dict[str, QWidget] = {}
+        self.jog_page.setMinimumSize(1000, 520)  # below this the page scrolls instead of squashing
         for name in PAGES:
             built = {"Jog": self.jog_page, "Points": self.points_page, "Teleop": self.teleop_page,
                      "Cameras": self.cameras_page}
             page = built.get(name) or PlaceholderPage(name, notes[name])
             self.pages[name] = page
-            self.stack.addWidget(page)
+            self._stack_items[name] = self._scrollable(page)
+            self.stack.addWidget(self._stack_items[name])
         self.setCentralWidget(self.stack)
-        self.rail.page_selected.connect(lambda n: self.stack.setCurrentWidget(self.pages[n]))
+        self.rail.page_selected.connect(lambda n: self.stack.setCurrentWidget(self._stack_items[n]))
         self.rail.select("Jog")
 
         self.log_dock = LogDock()
-        self.points_dock_view = PointsView(self.points, self._submit, self._log, dark=True)
+        self.points_dock_view = PointsView(self.points, self._submit, self._log, save=self._save_point, dark=True)
         self.log_dock.tabs.removeTab(1)
         self.log_dock.tabs.insertTab(1, self.points_dock_view, "Points")
         for view in (self.points_page, self.points_dock_view):
@@ -105,8 +108,11 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.BottomDockWidgetArea, self.log_dock)
         self.splitDockWidget(self.log_dock, self.camera_dock, Qt.Orientation.Horizontal)
         self.resizeDocks([self.log_dock, self.camera_dock], [8, 5], Qt.Orientation.Horizontal)
-        self.resizeDocks([self.log_dock], [180], Qt.Orientation.Vertical)
+        self.resizeDocks([self.log_dock], [150], Qt.Orientation.Vertical)
 
+        for dock in (self.log_dock, self.camera_dock):
+            dock.setMinimumHeight(90)
+        self.jog_page.robot_view.box_toggled.connect(self._box_toggled)
         self.status = StatusBar(cfg)
         self.setStatusBar(self.status)
         self._build_menu()
@@ -155,6 +161,20 @@ class MainWindow(QMainWindow):
         tb.stop_button.pressed.connect(lambda: self.worker.request_stop())  # on press, not release
         tb.home_clicked.connect(self._home)
         tb.save_point_clicked.connect(self._save_point)
+
+    @staticmethod
+    def _scrollable(page: QWidget) -> QScrollArea:
+        """Pages scroll instead of squashing, so the bottom docks can always be dragged taller."""
+        area = QScrollArea()
+        area.setWidgetResizable(True)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setWidget(page)
+        return area
+
+    def _box_toggled(self, on: bool) -> None:
+        self.worker.gate.box_enabled = on
+        self._log("info" if on else "warn", "safety box ON: steps clamp at the walls, moves outside are refused"
+                  if on else "safety box OFF: only joint limits and the speed cap protect the arm")
 
     def _submit(self, cmd) -> None:
         self.worker.submit(cmd)

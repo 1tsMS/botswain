@@ -12,7 +12,7 @@ from PySide6.QtWidgets import QButtonGroup, QGridLayout, QHBoxLayout, QPushButto
 from botswain.core.types import AXES_CART
 from botswain.ui.theme import set_role
 
-STEPS: tuple[float | None, ...] = (0.5, 1.0, 5.0, 10.0, None)  # None = Hold (continuous jog)
+STEPS: tuple[float | None, ...] = (0.5, 1.0, 5.0, 10.0, 50.0, None)  # None = Hold (continuous jog)
 
 
 class StepSelector(QWidget):
@@ -49,9 +49,9 @@ class JogPad(QWidget):
         self._holding = False
         grid = QGridLayout(self)
         grid.setContentsMargins(0, 0, 0, 0)
-        grid.setHorizontalSpacing(6)
-        grid.setVerticalSpacing(6)
-        grid.setColumnMinimumWidth(2, 12)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(8)
+        grid.setColumnMinimumWidth(2, 16)
         self.keys: dict[tuple[str, int], QPushButton] = {}
         joints = [f"J{i + 1}" for i in range(dof)]
         for row in range(max(len(AXES_CART), dof)):
@@ -64,6 +64,7 @@ class JogPad(QWidget):
         for i, sign in enumerate((-1, 1)):
             b = set_role(QPushButton(f"{axis} {'−' if sign < 0 else '+'}"), "key")
             b.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            b.setMinimumHeight(36)
             b.pressed.connect(lambda a=axis, s=sign: self._pressed(a, s))
             b.released.connect(self._released)
             grid.addWidget(b, row, col + i)

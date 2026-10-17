@@ -17,6 +17,7 @@ START = Pose(-482, -136, 484, 180, 0, 0)
 def gate():
     cfg = load_robot_config(ROBOTS / "dobot_cr5.yaml")  # 150 mm/s * 0.03 s = 4.5 mm per tick, teleport 80 mm
     g = SafetyGate(cfg.limits, cfg.stream.period_s)
+    g.box_enabled = True
     g.reset_stream(START)
     return g
 

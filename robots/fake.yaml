@@ -3,7 +3,8 @@ name: Fake CR5
 driver: fake
 model: {urdf: ../assets/dobot_cr5/cr5_robot.urdf}
 limits:
-  speed_cap_pct: 20
+  speed_cap_pct: 100
+  box_enabled: false  # switch on in the Robot view (Safety box)
   box_mm: {x: [-632, -332], y: [-286, 14], z: [334, 634]}
   joints_deg: [[-360, 360], [-360, 360], [-160, 160], [-360, 360], [-360, 360], [-360, 360]]
   max_tcp_speed_mm_s: 150

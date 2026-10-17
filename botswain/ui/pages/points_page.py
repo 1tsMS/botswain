@@ -8,6 +8,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
+    QLabel,
     QListWidget,
     QListWidgetItem,
     QPushButton,
@@ -24,7 +25,7 @@ class PointsView(QWidget):
     changed = Signal()
 
     def __init__(self, store: PointStore, submit: Callable[[Command], None], log: Callable[[str, str], None],
-                 dark: bool = False, parent: QWidget | None = None) -> None:
+                 save: Callable[[], None] | None = None, dark: bool = False, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.store = store
         self._submit = submit
@@ -37,8 +38,17 @@ class PointsView(QWidget):
         self.list.setFont(mono_font(12))
         self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.list.itemDoubleClicked.connect(lambda _item: self.go_to())
+        self.list.currentRowChanged.connect(lambda _row: self._update_buttons())
+        self.empty = QLabel("No saved points yet. Connect, enable, move the arm, then press Save current pose "
+                            "(or Save point in the toolbar). Double-click a point to go there.")
+        self.empty.setWordWrap(True)
+        self.empty.setProperty("role", "dockEmpty" if dark else "lab")
+        lay.addWidget(self.empty)
         lay.addWidget(self.list, 1)
         row = QHBoxLayout()
+        self.save_btn = self._button("Save current pose", "btn", lambda: save() if save else None)
+        self.save_btn.setVisible(save is not None)
+        row.addWidget(self.save_btn)
         self.go_btn = self._button("Go to", "primary", self.go_to)
         self.rename_btn = self._button("Rename", "btn", self.rename)
         self.delete_btn = self._button("Delete", "btn", self.delete)
@@ -65,6 +75,14 @@ class PointsView(QWidget):
             self.list.addItem(item)
             if p.name == current:
                 self.list.setCurrentItem(item)
+        self.empty.setVisible(self.list.count() == 0)
+        self.list.setVisible(self.list.count() > 0)
+        self._update_buttons()
+
+    def _update_buttons(self) -> None:
+        has = self.list.currentItem() is not None
+        for b in (self.go_btn, self.rename_btn, self.delete_btn):
+            b.setEnabled(has)
 
     def selected_name(self) -> str | None:
         item = self.list.currentItem()

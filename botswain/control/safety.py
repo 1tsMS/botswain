@@ -11,6 +11,7 @@ Streaming is the one stateful part: the gate remembers the last target it let th
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, replace
 
 import numpy as np
@@ -35,6 +36,7 @@ from botswain.core.types import (
     Mode,
     MoveTo,
     Pose,
+    RequestControl,
     RobotState,
     SetSpeed,
     Stop,
@@ -60,7 +62,8 @@ class Rejected:
 Verdict = Allowed | Rejected
 
 # Commands that can't move the arm. Release/stop-type commands must always get through.
-NON_MOTION = (Connect, Disconnect, Enable, Disable, ClearError, Stop, JogTick, JogRelease, Diagnose)
+NON_MOTION = (Connect, Disconnect, Enable, Disable, ClearError, Stop, JogTick, JogRelease, Diagnose,
+              RequestControl)
 
 # Modes each motion command may start from. Idle means idle: MOVING and JOGGING are not idle
 # (the old app treated "not error" as idle and re-sent moves on top of running ones).
@@ -115,6 +118,9 @@ class SafetyGate:
             if state.mode is Mode.DISCONNECTED or not state.link_ok:
                 return Rejected("ready", "not connected")
             return Allowed(cmd)
+        bad = _non_finite(cmd)
+        if bad:
+            return Rejected("invalid", bad)
         modes = READY_MODES.get(type(cmd))
         if modes is None:
             return Rejected("unknown", f"no safety rule for {type(cmd).__name__}")
@@ -303,3 +309,16 @@ def clamp_step(last: Pose, target: Pose, max_mm: float, max_deg: float) -> tuple
         rpy.append(lo_v + max(-max_deg, min(max_deg, delta)) if abs(delta) > max_deg else hi_v)
     clamped = dist > max_mm or any(r != t for r, t in zip(rpy, target.rpy, strict=True))
     return Pose(*xyz, *rpy), clamped
+
+
+def _non_finite(cmd: Command) -> str | None:
+    """NaN fails every comparison, so it would slip past the box and step limits: refuse it up front."""
+    if isinstance(cmd, JogStep):
+        values = [cmd.delta]
+    elif isinstance(cmd, MoveTo):
+        values = cmd.target.as_list()
+    elif isinstance(cmd, StreamTarget):
+        values = cmd.pose.as_list()
+    else:
+        return None
+    return None if all(math.isfinite(v) for v in values) else f"{type(cmd).__name__} contains NaN or infinity"

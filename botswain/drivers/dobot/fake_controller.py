@@ -266,6 +266,9 @@ class FakeDobotController:
         with self._lock:
             self.commands.append(text)
             if not self.tcp_mode:
+                if text.lower().startswith("requestcontrol"):
+                    self.tcp_mode = True  # like firmware >= 4.6: taking control switches to TCP mode
+                    return f"0,{{}},{text};"
                 return "Not Tcp"
             name, pos, kw = parse_command(text)
             try:

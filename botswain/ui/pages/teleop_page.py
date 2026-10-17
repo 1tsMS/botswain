@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 from botswain.control.worker import RobotWorker
 from botswain.core.types import Mode
 from botswain.teleop.mapping import TeleopMapper, remap_about_z
-from botswain.teleop.phone import PhoneServer
+from botswain.teleop.phone import CERT_DIR, PhoneServer, make_certificate
 from botswain.teleop.session import TeleopSession
 from botswain.ui.theme import mono_font, set_role
 from botswain.ui.widgets.panel import Panel
@@ -53,7 +53,12 @@ class TeleopPage(QWidget):
             "then start AR. Hold the on-screen button to move; let go to stop. Windows Firewall must allow inbound "
             f"TCP {PORT} (add the rule yourself)."), "lab")
         notes.setWordWrap(True)
-        for w in (self.start_btn, self.url_label, self.status_label, notes):
+        self.cert_btn = set_role(QPushButton("Make my own HTTPS certificate"), "btn")
+        self.cert_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.cert_btn.clicked.connect(self.make_cert)
+        self.cert_label = set_role(QLabel(""), "lab")
+        self.cert_label.setWordWrap(True)
+        for w in (self.start_btn, self.url_label, self.status_label, notes, self.cert_btn, self.cert_label):
             phone.body_layout.addWidget(w)
         phone.body_layout.addStretch(1)
 
@@ -106,6 +111,17 @@ class TeleopPage(QWidget):
         self.mapper.request_reanchor()  # never let a settings change make the target jump
         self.scale_value.setText(f"{self.mapper.scale_pos:.2f}")
 
+    def make_cert(self) -> None:
+        try:
+            path = make_certificate()
+        except (RuntimeError, OSError) as e:
+            self._log("error", f"certificate: {e}")
+            return
+        except Exception as e:  # noqa: BLE001 -- openssl failed: show its message
+            self._log("error", f"certificate: openssl failed ({e})")
+            return
+        self._log("info", f"own certificate written to {path}; restart the phone server to use it")
+
     def toggle_server(self) -> None:
         if self.server is None:
             server = PhoneServer(self.session.on_sample, port=PORT)
@@ -139,5 +155,10 @@ class TeleopPage(QWidget):
             self.status_label.setText(f"phones connected: {self.server.clients} · {self.server.hz:.0f} Hz · {hold}")
         else:
             self.status_label.setText("")
+        own = (CERT_DIR / "cert.pem").exists()
+        self.cert_label.setText("Certificate: this laptop's own (assets/certs)." if own else
+                                "Certificate: the teleop package's shared one (its private key is public). "
+                                "Fine on a lab network; better: make your own (needs Git for Windows).")
+        self.cert_btn.setEnabled(self.server is None)
         counts = self.worker.gate.counts
         self.counters.setText("Gate: " + " · ".join(f"{r} {counts.get(r, 0)}" for r in STREAM_RULES))

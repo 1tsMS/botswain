@@ -84,6 +84,9 @@ class Driver(ABC):
     def gripper(self, open: bool) -> None:
         raise DriverError(-1, "no gripper on this driver")
 
+    def request_control(self) -> None:
+        raise DriverError(-1, "this robot has no 'take control' command")
+
     def diagnose(self) -> list[Check]:
         """Driver-specific Doctor checks (ports, packet rate...)."""
         return []

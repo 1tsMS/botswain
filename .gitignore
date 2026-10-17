@@ -9,3 +9,5 @@ data/
 logs/
 robots/.last
 robots/*.points.json
+.tmp/
+assets/certs/

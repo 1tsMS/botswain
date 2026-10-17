@@ -11,8 +11,13 @@ from __future__ import annotations
 
 import json
 import logging
+import math
+import os
 import re
+import secrets
+import shutil
 import socket
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -21,7 +26,7 @@ from pathlib import Path
 
 import teleop
 import uvicorn
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -69,6 +74,40 @@ else { lines.push("-> open this address in Google Chrome"); done(); }
 </script>"""
 
 
+COOKIE = "botswain_key"
+WRONG_LINK = """<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
+<body style="font:16px sans-serif;padding:16px"><h3>Botswain</h3>
+<p>Open the full address shown on the Teleop page in Botswain (it ends with <code>?k=...</code>).
+The key changes every time the phone server starts.</p>"""
+
+
+def find_openssl() -> str | None:
+    found = shutil.which("openssl")
+    if found:
+        return found
+    for base in (os.environ.get("ProgramFiles", r"C:\Program Files"), os.environ.get("ProgramFiles(x86)", "")):
+        candidate = Path(base) / "Git" / "usr" / "bin" / "openssl.exe"
+        if base and candidate.exists():
+            return str(candidate)
+    return None
+
+
+def make_certificate(cert_dir: Path = CERT_DIR) -> Path:
+    """A self-signed certificate for this laptop, so the phone link does not use the teleop package's public key.
+
+    Uses openssl (comes with Git for Windows). Valid for this laptop's current IPs and localhost.
+    """
+    openssl = find_openssl()
+    if openssl is None:
+        raise RuntimeError("openssl not found (it comes with Git for Windows)")
+    cert_dir.mkdir(parents=True, exist_ok=True)
+    san = ",".join(["DNS:localhost", "IP:127.0.0.1", *(f"IP:{ip}" for ip in local_ips())])
+    subprocess.run([openssl, "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", str(cert_dir / "key.pem"),
+                    "-out", str(cert_dir / "cert.pem"), "-days", "825", "-subj", "/CN=Botswain",
+                    "-addext", f"subjectAltName={san}"], check=True, capture_output=True, timeout=60)
+    return cert_dir / "cert.pem"
+
+
 @dataclass(frozen=True)
 class PhoneSample:
     t_ns: int
@@ -82,6 +121,9 @@ class PhoneSample:
 def parse_message(data: dict, t_ns: int) -> PhoneSample:
     """The 'data' part of a pose message. Raises KeyError/ValueError on a malformed one."""
     p, o = data["position"], data["orientation"]
+    numbers = [float(v) for v in (p["x"], p["y"], p["z"], o["w"], o["x"], o["y"], o["z"], data.get("scale", 1.0))]
+    if not all(math.isfinite(v) for v in numbers):
+        raise ValueError("pose contains NaN or infinity")
     return PhoneSample(
         t_ns=t_ns,
         position_m=(float(p["x"]), float(p["y"]), float(p["z"])),
@@ -107,6 +149,8 @@ class PhoneServer:
     def __init__(self, on_sample: Callable[[PhoneSample], None], port: int = 4443, host: str = "0.0.0.0") -> None:
         self.on_sample = on_sample
         self.port = port
+        self.token = secrets.token_urlsafe(9)  # new pairing key every time the server starts
+        self.refused = 0
         self.clients = 0
         self.samples = 0
         self.bad_messages = 0
@@ -120,8 +164,13 @@ class PhoneServer:
         page = (frontend / "index.html").read_text(encoding="utf-8").replace("</body>", DIAGNOSE_JS + "</body>", 1)
 
         @app.get("/")
-        async def index() -> HTMLResponse:
-            return HTMLResponse(page)
+        async def index(request: Request) -> HTMLResponse:
+            # Only someone who can read the address in the app gets the page and the session cookie.
+            if not secrets.compare_digest(request.query_params.get("k", ""), self.token):
+                return HTMLResponse(WRONG_LINK, status_code=403)
+            response = HTMLResponse(page)
+            response.set_cookie(COOKIE, self.token, httponly=True, secure=True, samesite="strict")
+            return response
 
         @app.get("/check")
         async def check() -> HTMLResponse:
@@ -129,6 +178,11 @@ class PhoneServer:
 
         @app.websocket("/ws")
         async def ws(websocket: WebSocket) -> None:
+            if not secrets.compare_digest(websocket.cookies.get(COOKIE, ""), self.token):
+                self.refused += 1
+                log.warning("phone connection refused: no valid pairing key")
+                await websocket.close(code=1008)
+                return
             await websocket.accept()
             self.clients += 1
             log.info("phone connected")
@@ -151,7 +205,8 @@ class PhoneServer:
 
     @property
     def urls(self) -> list[str]:
-        return [f"https://{ip}:{self.port}" for ip in local_ips()] or [f"https://<laptop-ip>:{self.port}"]
+        hosts = local_ips() or ["<laptop-ip>"]
+        return [f"https://{ip}:{self.port}/?k={self.token}" for ip in hosts]
 
     def start(self, timeout_s: float = 5.0) -> None:
         self._thread.start()

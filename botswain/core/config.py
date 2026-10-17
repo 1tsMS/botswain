@@ -178,7 +178,10 @@ def _connection(d: dict) -> ConnectionCfg:
     for k, v in ports.items():
         if not 1 <= v <= 65535:
             raise ConfigError(w + k, f"not a valid port: {v}")
-    return ConnectionCfg(ip=_text(d, "ip", w), **ports)
+    ip = _text(d, "ip", w)
+    if not _valid_host(ip):
+        raise ConfigError(w + "ip", f"not an IP address or host name: {ip!r}")
+    return ConnectionCfg(ip=ip, **ports)
 
 
 def _stream(d: dict) -> StreamCfg:
@@ -254,3 +257,14 @@ def _no_unknown_keys(d: dict, known: set[str], where: str) -> None:
     unknown = sorted(set(d) - known)
     if unknown:
         raise ConfigError(where + unknown[0], f"unknown key (known: {', '.join(sorted(known))})")
+
+
+def _valid_host(text: str) -> bool:
+    import ipaddress
+    import re
+
+    try:
+        ipaddress.ip_address(text)
+        return True
+    except ValueError:
+        return re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252}[A-Za-z0-9])?", text) is not None

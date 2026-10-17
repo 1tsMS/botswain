@@ -252,6 +252,11 @@ class Gripper:
 
 
 @dataclass(frozen=True)
+class RequestControl:
+    """Take TCP/IP control of the controller (Dobot firmware >= 4.6), instead of switching it in DobotStudio."""
+
+
+@dataclass(frozen=True)
 class Diagnose:
     """Run the driver's Doctor checks on the worker thread (it owns the sockets); results go to reply()."""
 
@@ -260,5 +265,5 @@ class Diagnose:
 
 Command = (
     Connect | Disconnect | Enable | Disable | ClearError | Stop | SetSpeed
-    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | Diagnose
+    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | Diagnose | RequestControl
 )

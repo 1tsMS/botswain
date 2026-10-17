@@ -48,7 +48,8 @@ def server():
 
 def test_phone_server_end_to_end(server):
     srv, got = server
-    ws = websocket.create_connection(f"wss://127.0.0.1:{srv.port}/ws", sslopt={"cert_reqs": ssl.CERT_NONE})
+    ws = websocket.create_connection(f"wss://127.0.0.1:{srv.port}/ws", sslopt={"cert_reqs": ssl.CERT_NONE},
+                                     cookie=f"botswain_key={srv.token}")
     try:
         assert wait_for(lambda: srv.clients == 1)
         ws.send(json.dumps({"type": "pose", "data": SAMPLE}))
@@ -67,7 +68,7 @@ def test_phone_page_served_over_https(server):
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
-    with urllib.request.urlopen(f"https://127.0.0.1:{srv.port}/", context=ctx, timeout=3) as r:
+    with urllib.request.urlopen(f"https://127.0.0.1:{srv.port}/?k={srv.token}", context=ctx, timeout=3) as r:
         body = r.read().lower()
         assert r.status == 200 and b"<html" in body and b"botswain:" in body  # error reporter injected
     with urllib.request.urlopen(f"https://127.0.0.1:{srv.port}/check", context=ctx, timeout=3) as r:

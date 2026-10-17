@@ -204,5 +204,29 @@ def test_hold_jog_released_at_box_wall(qtbot, rig):
     qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.IDLE, timeout=2000)  # released by the gate
     qtbot.mouseRelease(key, Qt.MouseButton.LeftButton)
     # one or two worker ticks of overshoot at 50 mm/s when the test thread competes for the GIL
-    assert -332.0 - 1.5 <= worker.latest_state().tcp.x <= -332.0 + 5.0
+    # predictive stop: releases 1 mm + 60 ms of travel before the wall (about 4 mm at 50 mm/s)
+    assert -332.0 - 6.0 <= worker.latest_state().tcp.x <= -332.0 + 2.0
     qtbot.waitUntil(lambda: "released (box)" in w.log_dock.log_view.toPlainText(), timeout=1000)
+
+
+def test_space_types_in_task_field_but_esc_still_stops(qtbot, rig):
+    _, w, _, stops = rig
+    w.show()
+    field = w.episode_bar.task_edit
+    field.setFocus()
+    qtbot.keyClicks(field, "pick")
+    qtbot.keyClick(field, Qt.Key.Key_Space)
+    qtbot.keyClicks(field, "cube")
+    assert field.text() == "pick cube" and not stops
+    qtbot.keyClick(field, Qt.Key.Key_Escape)
+    assert stops
+
+
+def test_episode_bar_lives_in_episodes_tab(qtbot, rig):
+    _, w, _, _ = rig
+    tabs = w.log_dock.tabs
+    assert tabs.tabText(2) == "Episodes" and tabs.widget(2) is w.episode_bar
+    if w.episode_bar.session is None:
+        assert not w.episode_bar.start_btn.isEnabled()
+    else:
+        assert w.episode_bar.start_btn.isEnabled() and not w.episode_bar.save_btn.isEnabled()

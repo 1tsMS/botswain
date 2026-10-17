@@ -84,7 +84,7 @@ class Kinematics:
         return tip, jac
 
     def ik(self, target: np.ndarray, seed_deg: Sequence[float], max_iters: int = 40,
-           tol_mm: float = 1e-5, tol_rad: float = 1e-9) -> np.ndarray | None:
+           tol_mm: float = 1e-5, tol_rad: float = 1e-7) -> np.ndarray | None:
         """Joint angles (deg) that put the tip at `target` (4x4, mm), starting from `seed_deg`. None if not found."""
         q = np.radians(np.asarray(seed_deg, dtype=float))
         for _ in range(max_iters):

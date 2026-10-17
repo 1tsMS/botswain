@@ -33,6 +33,7 @@ from botswain.core.types import (
     JogTick,
     MoveTo,
     Pose,
+    RequestControl,
     RobotState,
     SetSpeed,
     Stop,
@@ -43,7 +44,8 @@ from botswain.drivers.base import Check, Driver, DriverError
 log = logging.getLogger(__name__)
 
 HOLD_TIMEOUT_NS = 150_000_000  # no "still held" tick for this long -> release the hold-jog
-RULE_LOG_PERIOD_NS = 1_000_000_000  # at most one log line per second per gate rule
+RULE_LOG_PERIOD_NS = 1_000_000_000
+STOP_LOOKAHEAD_S = 0.06  # release a hold-jog this long before it would reach a limit (stop latency)  # at most one log line per second per gate rule
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ class RobotWorker:
         self._connected = False
         self._hold_tick_ns: int | None = None  # last "still held" time while a hold-jog runs, else None
         self._hold_cmd: JogHold | None = None
+        self._prev_tcp: tuple[float, float, float, int] | None = None  # for the TCP speed estimate
         self.stream_period_ns = int(gate.period_s * 1e9)
         self._stream_latest: StreamTarget | None = None  # newest teleop target, replaced by every new sample
         self._stream_input_ns = 0  # arrival time of the newest sample
@@ -254,6 +257,9 @@ class RobotWorker:
                 self._log("error", "StreamTarget must go through worker.stream(), not the queue")
             case Gripper(open=is_open):
                 self._call("gripper", d.gripper, is_open)
+            case RequestControl():
+                if self._call("request_control", d.request_control):
+                    self._log("info", "controller control taken (RequestControl)")
             case Diagnose(reply=reply):
                 try:
                     checks = d.diagnose()
@@ -267,13 +273,23 @@ class RobotWorker:
     def _watchdog(self, state: RobotState) -> None:
         """Release a hold-jog when the GUI stops ticking (frozen, crashed) or the arm reaches a limit."""
         if self._hold_tick_ns is None:
+            self._prev_tcp = None
             return
         if now_ns() - self._hold_tick_ns > HOLD_TIMEOUT_NS:
             self._hold_tick_ns = None
             self._log("warn", "hold-jog released by watchdog: no 'still held' tick for 150 ms")
             self._call("jog_release", self.driver.jog_release)
             return
-        why = self.gate.hold_violation(self._hold_cmd, state) if self._hold_cmd is not None else None
+        # Predictive: margin = 1 mm + distance covered during the stop latency, from the measured TCP speed.
+        x, y, z = state.tcp.xyz
+        speed = 0.0
+        if self._prev_tcp is not None and state.t_ns > self._prev_tcp[3]:
+            px, py, pz, pt = self._prev_tcp
+            speed = ((x - px) ** 2 + (y - py) ** 2 + (z - pz) ** 2) ** 0.5 / ((state.t_ns - pt) / 1e9)
+        self._prev_tcp = (x, y, z, state.t_ns)
+        margin = 1.0 + speed * STOP_LOOKAHEAD_S
+        why = (self.gate.hold_violation(self._hold_cmd, state, margin_mm=margin)
+               if self._hold_cmd is not None else None)
         if why is not None:
             self._hold_tick_ns = None
             self.gate.counts[why[0]] = self.gate.counts.get(why[0], 0) + 1

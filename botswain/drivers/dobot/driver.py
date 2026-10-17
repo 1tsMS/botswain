@@ -219,6 +219,20 @@ class DobotDriver(Driver):
         log.info("gripper %s reply: %s", "open" if open else "close", reply)
         self._gripper_pos = 1.0 if open else 0.0  # commanded, not measured: DH position read-back comes later
 
+    def request_control(self) -> None:
+        """RequestControl() (firmware >= 4.6). Works before Connect, which is the point: Connect fails with
+        'Not Tcp' until the controller is in TCP mode. The controller allows it only while disabled."""
+        if self._connected:
+            self._ok(self._dash, cmd.request_control())
+            return
+        c = self.cfg.connection
+        dash = DashboardClient(c.ip, c.dashboard_port)
+        dash.connect()
+        try:
+            dash.call_ok(cmd.request_control())
+        finally:
+            dash.close()
+
     # ---- Doctor ----
 
     def diagnose(self) -> list[Check]:

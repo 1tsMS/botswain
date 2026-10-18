@@ -22,6 +22,7 @@ from botswain.teleop.mapping import TeleopMapper, remap_about_z
 from botswain.teleop.phone import CERT_DIR, PhoneServer, make_certificate
 from botswain.teleop.session import TeleopSession
 from botswain.ui.theme import mono_font, set_role
+from botswain.ui.widgets.gamepad_panel import GamepadPanel
 from botswain.ui.widgets.panel import Panel
 
 PORT = 4443
@@ -92,6 +93,9 @@ class TeleopPage(QWidget):
 
         grid.addWidget(phone, 0, 0)
         grid.addWidget(mapping, 0, 1)
+        self.gamepad = GamepadPanel(worker, log)
+        grid.addWidget(self.gamepad, 1, 0, 1, 2)
+        grid.setRowStretch(2, 1)  # spare height goes below the panels, not into them
         grid.setColumnStretch(0, 3)
         grid.setColumnStretch(1, 2)
 
@@ -108,6 +112,7 @@ class TeleopPage(QWidget):
         self.mapper.scale_pos = self.scale_slider.value() / 100.0
         self.mapper.scale_rot = 1.0 if self.rotation_box.isChecked() else 0.0
         self.mapper.remap = remap_about_z(self.facing.currentData())
+        self.gamepad.teleop.remap = self.mapper.remap  # one 'facing' setting for every teleop input
         self.mapper.request_reanchor()  # never let a settings change make the target jump
         self.scale_value.setText(f"{self.mapper.scale_pos:.2f}")
 
@@ -137,6 +142,7 @@ class TeleopPage(QWidget):
             self.shutdown()
 
     def shutdown(self) -> None:
+        self.gamepad.shutdown()
         if self.server is None:
             return
         self.server.stop()

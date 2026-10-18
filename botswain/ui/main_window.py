@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QMainWindow, QScrollArea, QStackedWidget, QWidget
 
 from botswain.control.points import PointStore
+from botswain.control.program import ProgramRunner
 from botswain.control.worker import RobotWorker
 from botswain.core.config import RobotConfig
 from botswain.core.types import (
@@ -26,6 +27,7 @@ from botswain.core.types import (
 from botswain.record.session import RecordingSession, lerobot_available, lerobot_writer_factory
 from botswain.ui.docks import LogDock, camera_dock
 from botswain.ui.doctor_dialog import DoctorDialog
+from botswain.ui.pages.blocks_page import BlocksPage
 from botswain.ui.pages.cameras_page import CamerasPage
 from botswain.ui.pages.jog_page import JogPage
 from botswain.ui.pages.placeholder_page import PlaceholderPage
@@ -53,8 +55,9 @@ class StopKeyFilter(QObject):
 
     def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if event.type() == QEvent.Type.KeyPress and isinstance(event, QKeyEvent) and event.key() in STOP_KEYS:
-            focus = QApplication.focusWidget()
-            if event.key() == Qt.Key.Key_Space and focus is not None and focus.property("free_text"):
+            # The widget receiving the key decides (the app's focus widget can be empty when the window
+            # is not the active OS window).
+            if event.key() == Qt.Key.Key_Space and isinstance(obj, QWidget) and obj.property("free_text"):
                 return False  # typing a task or dataset name: Space is a space here, Esc still stops
             if not event.isAutoRepeat():
                 self._stop()
@@ -85,7 +88,10 @@ class MainWindow(QMainWindow):
         self.points_page = PointsView(self.points, self._submit, self._log, save=self._save_point)
         self.teleop_page = TeleopPage(worker, self._log)
         self.cameras_page = CamerasPage(self._log)
-        notes = {"Script": "coming later", "Blocks": "coming later",
+        home = cfg.home_joints_deg if cfg.home_confirmed else None
+        self.runner = ProgramRunner(worker, self.points, home, log_cb=self._log)
+        self.blocks_page = BlocksPage(self.runner, lambda: [p.name for p in self.points.all()], self._log)
+        notes = {"Script": "coming later",
                  "Teleop": "phone teleop comes in T5", "Cameras": "cameras come in T5",
                  "Settings": f"robot settings live in {cfg.path.name}"}
         self.pages: dict[str, QWidget] = {}
@@ -93,7 +99,7 @@ class MainWindow(QMainWindow):
         self.jog_page.setMinimumSize(1000, 520)  # below this the page scrolls instead of squashing
         for name in PAGES:
             built = {"Jog": self.jog_page, "Points": self.points_page, "Teleop": self.teleop_page,
-                     "Cameras": self.cameras_page}
+                     "Cameras": self.cameras_page, "Blocks": self.blocks_page}
             page = built.get(name) or PlaceholderPage(name, notes[name])
             self.pages[name] = page
             self._stack_items[name] = self._scrollable(page)
@@ -135,7 +141,8 @@ class MainWindow(QMainWindow):
         self._wire_toolbar()
         if getattr(self, "log_dock_pending", None):
             self._log("error", self.log_dock_pending)
-        self.stop_filter = StopKeyFilter(lambda: self.worker.request_stop())
+        self.stop_filter = StopKeyFilter(self.stop_all)
+        self.teleop_page.gamepad.action.connect(self._gamepad_action)
         QApplication.instance().installEventFilter(self.stop_filter)
 
     def _build_menu(self) -> None:
@@ -149,7 +156,7 @@ class MainWindow(QMainWindow):
                         lambda: self.worker.submit(RequestControl()))
         stop = QAction("STOP", self)
         stop.setShortcutVisibleInContextMenu(True)
-        stop.triggered.connect(self.worker.request_stop)
+        stop.triggered.connect(self.stop_all)
         robot.addAction(stop)
         view = bar.addMenu("View")
         view.addAction(self.log_dock.toggleViewAction())
@@ -171,7 +178,7 @@ class MainWindow(QMainWindow):
         tb.doctor_clicked.connect(self.open_doctor)
         tb.enable_toggled.connect(lambda on: self.worker.submit(Enable() if on else Disable()))
         tb.clear_clicked.connect(lambda: self.worker.submit(ClearError()))
-        tb.stop_button.pressed.connect(lambda: self.worker.request_stop())  # on press, not release
+        tb.stop_button.pressed.connect(self.stop_all)  # on press, not release
         tb.home_clicked.connect(self._home)
         tb.save_point_clicked.connect(self._save_point)
         tb.record_clicked.connect(self._record_clicked)
@@ -206,6 +213,7 @@ class MainWindow(QMainWindow):
 
     def _refresh_points(self) -> None:
         self.points_page.refresh()
+        self.blocks_page.refresh_points()
         self.points_dock_view.refresh()
 
     def _save_point(self) -> None:
@@ -222,6 +230,19 @@ class MainWindow(QMainWindow):
             self._log("warn", "Home is disabled until home_confirmed: true in the robot YAML")
             return
         self._submit(MoveTo(Joints(self.cfg.home_joints_deg), "joint"))
+
+    def stop_all(self) -> None:
+        """STOP: abort a running Blocks program first (so it sends nothing more), then stop the robot."""
+        self.runner.abort()
+        self.worker.request_stop()
+
+    def _gamepad_action(self, name: str) -> None:
+        if name == "start":
+            self._record_clicked()
+        elif name == "back":
+            self.episode_bar.discard()
+        elif name == "x":
+            self._save_point()
 
     def _record_clicked(self) -> None:
         """Toolbar Record: start an episode, or save the running one. Details live in the Episodes tab."""
@@ -260,6 +281,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         QApplication.instance().removeEventFilter(self.stop_filter)
+        self.runner.abort()
         self.teleop_page.shutdown()
         self.worker.shutdown()  # sends stop, then disconnects
         if self.episode_bar.session is not None and self.episode_bar.session.recorder is not None:

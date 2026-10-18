@@ -13,6 +13,8 @@ robots: one driver file per brand.
 | Live pose, joints and 3D model (CR5 URDF) | fake robot |
 | Safety gate: speed cap, workspace box, joint limits, hold-jog watchdog | unit tests |
 | Saved points, gripper (DH over RS485) | fake robot, fake Dobot controller |
+| Game controller teleop (Xbox-style, hold LB to move) and recording from the pad | unit tests with a simulated pad |
+| Blocks: drag-and-drop programs run through the safety gate | program runner tests on the fake robot |
 | Phone teleop (WebXR, hold to move) | unit and server tests; on a phone: see [Phone teleop](#phone-teleop) |
 | Cameras: any video source (webcam, DroidCam, OBS Virtual Camera) | this laptop |
 | Dataset recording in LeRobot format (commanded **and** measured actions) | LeRobot round-trip test |
@@ -126,6 +128,33 @@ Start with motion scale 0.3 and rotation off. If Start does nothing, open the sa
 instead of `/?k=...`: it tells you what the phone is missing. **Make my own HTTPS certificate** replaces the
 teleop package's shared certificate (needs Git for Windows).
 
+### Game controller
+Any Xbox-style pad in **X-input mode** (Cosmic Byte and similar have an X-input / D-input switch).
+Teleop page > **Use game controller**. The arm moves only while **LB** is held.
+
+| Control | Does |
+|---|---|
+| hold **LB** | move (let go = stop) |
+| left stick | X / Y |
+| RT / LT | Z up / down |
+| right stick | Rz / Ry |
+| RB | slow mode (quarter speed) |
+| A / B | gripper open / close |
+| D-pad up / down | speed +/- 10 % |
+| **Start** | recording: start an episode, or save the running one |
+| **Back** | discard the running episode |
+| X | save the current pose as a point |
+
+The sticks set a speed; the target goes through the same teleop safety rules as the phone. "Phone forward is
+robot" on the Mapping panel also turns the controller's axes.
+
+### Blocks
+Drag-and-drop programs. Put blocks inside **when Run is pressed** and press **Run**: move to a saved point,
+move relative, move to a pose or joint angles, home, gripper, speed, wait, repeat. The running block is
+highlighted. **STOP** (or Space / Esc) aborts the program, and so does any command the safety gate refuses
+or a robot error. Programs save as JSON in `programs/`. The editor never runs generated code: Botswain reads
+the blocks and sends each step through the safety gate, like a button press.
+
 ### Cameras
 **Cameras** page: **Scan** lists every video source Windows knows (USB webcams, DroidCam, OBS Virtual
 Camera...), pick one or "All sources", **Show**. DroidCam and OBS show a picture only while they run.
@@ -171,8 +200,8 @@ state ─> GUI (30 Hz), 3D view, recorder (with cameras, on one clock)
 botswain/
   core/       types, clock, robot YAML loading, kinematics, logging
   drivers/    driver contract, fake robot, dobot/ (commands, dashboard, feedback, gripper, fake controller)
-  control/    worker thread, safety gate, Doctor, saved points
-  teleop/     phone server, phone-to-robot mapping
+  control/    worker thread, safety gate, Doctor, saved points, Blocks program runner
+  teleop/     phone server, phone-to-robot mapping, game controller
   sensors/    cameras
   record/     recorder, LeRobot writer, recording session
   ui/         main window, toolbar, pages, widgets, theme
@@ -219,6 +248,7 @@ Then run the app with `robots/dobot_cr5_fake.yaml`. In its window, type a key an
 | Phone: Start does nothing | open `/check`; use Chrome; install "Google Play Services for AR" |
 | Phone server won't start | another program uses port 4443 |
 | Camera tile black | DroidCam / OBS virtual camera not running, or the camera is used by another app |
+| Controller "not connected" | plug it in, switch it to X-input mode (mode button / switch on the pad) |
 | Record button grey | install LeRobot (`pip install -e .[record]`) and Connect |
 
 Logs: `logs/botswain.log`.
@@ -227,3 +257,4 @@ Logs: `logs/botswain.log`.
 
 Apache-2.0. CR5 model in `assets/dobot_cr5/`: MIT (Dobot). IBM Plex fonts: OFL. Phone page: from the
 `teleop` package (SpesRobotics, Apache-2.0).
+Block editor: Blockly (Google, Apache-2.0), in `assets/blockly/`.

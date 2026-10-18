@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal
 from PySide6.QtWidgets import QApplication
 
 from botswain.control.safety import SafetyGate
@@ -39,6 +39,8 @@ def build(cfg: RobotConfig, view_3d: bool = True) -> tuple[RobotWorker, MainWind
 
 def run(cfg: RobotConfig) -> int:
     log_file = setup_logging(LOG_DIR)
+    # The Blocks page loads Qt's web engine later; it needs shared OpenGL contexts set before the app exists.
+    QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName("Botswain")
     theme.apply(app)

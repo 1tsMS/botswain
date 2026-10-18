@@ -60,7 +60,8 @@ Rules that never change:
 | `drivers/registry.py` | Maps the `driver:` name in the YAML to the driver class |
 | `drivers/fake.py` | The fake robot |
 | `drivers/dobot/` | The real Dobot driver (below) |
-| `teleop/` | Phone server, and phone motion to robot target |
+| `teleop/` | Phone server, phone motion to robot target, game controller (`gamepad.py`) |
+| `control/program.py` | Runs Blocks programs: reads the saved blocks and sends each step through the worker |
 | `sensors/cameras.py` | One background thread per camera, keeps the newest picture and its time |
 | `record/` | Recording datasets |
 | `ui/` | Everything on screen: window, toolbar, pages, 3D view, theme |
@@ -138,6 +139,22 @@ checksum. The controller forwards those bytes to the gripper over the tool's RS4
 
 Because every robot answers the same contract, adding another brand means writing one new driver file;
 the GUI, safety gate, teleop and recorder stay the same.
+
+---
+
+## Game controller and Blocks
+
+**Game controller** (`teleop/gamepad.py`): read 50 times a second from Windows' built-in XInput, no extra
+library. While LB is held, stick deflection is a speed; the target pose is moved by speed x time, starting
+from where the arm really is, and never more than 30 mm ahead of it. That target goes into the same teleop
+stream as the phone, so the safety gate treats both the same way. Start / Back / X drive recording and
+saved points, so a whole data-collection session can run from the pad.
+
+**Blocks** (`ui/pages/blocks_page.py`, `control/program.py`): the Blockly editor (Google's drag-and-drop
+block library, stored in `assets/blockly/`) runs in a web view inside the app. It only *builds* the program.
+On Run, the program is read as JSON and a small Python interpreter walks it block by block: it submits each
+step to the worker, waits for the move to finish, and stops at once on STOP, a refused command or a robot
+error. Unknown blocks are refused instead of guessed at.
 
 ---
 

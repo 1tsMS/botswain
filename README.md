@@ -1,5 +1,7 @@
 # Botswain
 
+New here? Read [How Botswain works](docs/how-it-works.md) first.
+
 A Windows desktop app to **connect, check, jog, teleoperate and record datasets** on collaborative robots.
 First robot: Dobot CR5 (V4 controller). Built for teleop and imitation-learning research, open for other
 robots: one driver file per brand.
@@ -179,7 +181,8 @@ assets/       CR5 URDF + meshes, fonts
 tests/        one test file per module (pytest)
 ```
 
-More detail: [SPEC.md](SPEC.md) (design and decisions), [RESEARCH_NOTES.md](RESEARCH_NOTES.md) (protocol facts).
+More detail: [docs/how-it-works.md](docs/how-it-works.md) (plain-language tour: fake robot, Dobot driver,
+recording), [SPEC.md](SPEC.md) (design and decisions), [RESEARCH_NOTES.md](RESEARCH_NOTES.md) (protocol facts).
 
 ---
 

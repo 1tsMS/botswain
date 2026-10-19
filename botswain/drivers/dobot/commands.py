@@ -127,3 +127,28 @@ def set_tool_power(on: bool) -> str:
 
 def set_tool_485(baud: int, parity: str = "N", stop: int = 1) -> str:
     return f'SetTool485({int(baud)},"{parity}",{int(stop)})'
+
+
+# ---- older controller firmware ----
+# Some V4 controllers (seen on the lab CR5, 2026-10-19) refuse the keyword forms above with -30001/-30002
+# (named parameter not understood) but accept the older positional forms below. The driver tries the
+# keyword form first and falls back to these only on that syntax refusal, so nothing moves twice.
+
+
+def joint_mov_j_legacy(j: Joints | Sequence[float]) -> str:
+    values = j.values if isinstance(j, Joints) else j
+    return f"JointMovJ({_six(values, 'JointMovJ')})"
+
+
+def mov_j_pose_legacy(p: Pose) -> str:
+    return f"MovJ({_six(p.as_list(), 'MovJ pose')})"
+
+
+def mov_l_pose_legacy(p: Pose) -> str:
+    return f"MovL({_six(p.as_list(), 'MovL pose')})"
+
+
+def move_jog_legacy(axis: str, coordtype: int) -> str:
+    if coordtype not in (0, 1, 2):
+        raise ValueError(f"coordtype must be 0, 1 or 2, got {coordtype}")
+    return f"MoveJog({axis},CoordType={coordtype},User=0,Tool=0)"

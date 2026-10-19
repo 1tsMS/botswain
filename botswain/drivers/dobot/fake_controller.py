@@ -29,7 +29,7 @@ TICK_S = 0.008
 LIN_SPEED = 250.0  # mm/s at 100 % speed factor
 JOINT_SPEED = 60.0  # deg/s at 100 %
 CART = {"x": 0, "y": 1, "z": 2, "rx": 3, "ry": 4, "rz": 5}
-MOTION = {"movj", "movl", "relmovluser", "relmovltool", "reljointmovj", "servop", "movejog"}
+MOTION = {"movj", "movl", "jointmovj", "relmovluser", "relmovltool", "reljointmovj", "servop", "movejog"}
 
 
 def split_args(inner: str) -> list[str]:
@@ -76,6 +76,7 @@ class FakeDobotController:
         self.tcp_mode = True
         self.feedback_paused = False
         self.pose_offset_mm = 0.0  # GetPose() differs from feedback by this much (Doctor test)
+        self.legacy = False  # behave like the lab CR5's older firmware (positional syntax only)
         self.commands: list[str] = []
         self.gripper_frames: list[list[int]] = []
 
@@ -271,6 +272,13 @@ class FakeDobotController:
                     return f"0,{{}},{text};"
                 return "Not Tcp"
             name, pos, kw = parse_command(text)
+            if self.legacy:
+                if name in ("movj", "movl") and ("joint" in kw or "pose" in kw):
+                    return f"-30001,{{}},{text};"
+                if name == "movejog" and "coordtype=" in text:
+                    return f"-30002,{{}},{text};"
+            elif name == "jointmovj":
+                return f"-10000,{{}},{text};"
             try:
                 err, values = self._do(name, pos, kw)
             except (ValueError, IndexError):
@@ -344,11 +352,15 @@ class FakeDobotController:
             self.jog = (is_joint, index, 1 if axis.endswith("+") else -1)
             self.mode = 8
             return 0
-        if name in ("movj", "movl"):
+        if name == "jointmovj":
+            self.joints_target = np.array([float(v) for v in pos[:6]])
+        elif name in ("movj", "movl"):
             if "joint" in kw:
                 self.joints_target = vec(kw["joint"])
-            else:
+            elif "pose" in kw:
                 self.tcp_target = vec(kw["pose"])
+            else:
+                self.tcp_target = np.array([float(v) for v in pos[:6]])
         elif name in ("relmovluser", "relmovltool"):
             self.tcp_target = self.tcp_target + np.array([float(v) for v in pos[:6]])
         elif name == "reljointmovj":

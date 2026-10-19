@@ -38,7 +38,7 @@ MODE_MAP = {3: Mode.POWERED_OFF, 4: Mode.DISABLED, 5: Mode.IDLE, 6: Mode.DRAG, 7
 MODE_TEXT = {1: "init", 2: "brake open", 3: "powered off", 4: "disabled", 5: "enabled, idle", 6: "drag mode",
              7: "running (queue)", 8: "single move (jog)", 9: "error (alarm)", 10: "paused", 11: "collision"}
 START_SPEED_PCT = 10  # set on connect, so the first move after Enable is slow whatever the pendant had
-ENABLE_TIMEOUT_S = 5.0  # EnableRobot can take a few seconds to answer
+ENABLE_TIMEOUT_S = 20.0  # EnableRobot answers only when enabling is done: over 5 s on the lab CR5
 COORD_FRAME = {"base": 1, "tool": 2}  # MoveJog coordtype; joints use 0
 
 
@@ -66,6 +66,7 @@ class DobotDriver(Driver):
                              if self.capabilities.gripper and cfg.gripper else None)
         self._gripper_ready = False
         self._gripper_pos: float | None = None
+        self.legacy_syntax: bool | None = None  # None = not known yet, learned from the first refusal
 
     @property
     def latency_ms(self) -> float | None:
@@ -190,16 +191,34 @@ class DobotDriver(Driver):
 
     def move_to(self, target: Pose | Joints, kind: str) -> None:
         if isinstance(target, Joints):
-            self._ok(self._motion, cmd.mov_j_joints(target))
+            self._dialect(self._motion, cmd.mov_j_joints(target), cmd.joint_mov_j_legacy(target))
         elif kind == "linear":
-            self._ok(self._motion, cmd.mov_l_pose(target))
+            self._dialect(self._motion, cmd.mov_l_pose(target), cmd.mov_l_pose_legacy(target))
         else:
-            self._ok(self._motion, cmd.mov_j_pose(target))
+            self._dialect(self._motion, cmd.mov_j_pose(target), cmd.mov_j_pose_legacy(target))
 
     def jog_hold(self, axis: str, direction: int, frame: str) -> None:
         sign = "+" if direction > 0 else "-"
         coordtype = 0 if is_joint_axis(axis) else COORD_FRAME[frame]
-        self._ok(self._dash, cmd.move_jog(f"{axis}{sign}", coordtype))
+        self._dialect(self._dash, cmd.move_jog(f"{axis}{sign}", coordtype),
+                      cmd.move_jog_legacy(f"{axis}{sign}", coordtype))
+
+    def _dialect(self, client: DashboardClient, modern: str, legacy: str) -> None:
+        """Send the V4.6 keyword form; if the controller refuses it as a syntax error (nothing moved), send
+        the older positional form instead and remember which one this controller speaks."""
+        if self.legacy_syntax is not True:
+            try:
+                self._ok(client, modern)
+                self.legacy_syntax = False
+                return
+            except DriverError as e:
+                if self.legacy_syntax is False or not _syntax_refusal(e.code):
+                    raise
+                log.warning("%s refused as syntax (%d), trying the older command form", modern, e.code)
+        self._ok(client, legacy)
+        if self.legacy_syntax is not True:
+            self.legacy_syntax = True
+            log.warning("this controller uses the older Dobot command syntax (JointMovJ, CoordType=...)")
 
     def jog_release(self) -> None:
         self._ok(self._dash, cmd.move_jog(None))
@@ -261,6 +280,9 @@ class DobotDriver(Driver):
         checks.append(Check("Alarms", "ok" if not self._alarm_ids else "fail",
                             "none" if not self._alarm_ids else f"{list(self._alarm_ids)} {alarm_text}".strip(),
                             "" if not self._alarm_ids else "fix the cause, then Clear error"))
+        syntax = {None: "not known yet (no move sent)", False: "V4.6 keyword form",
+                  True: "older positional form (JointMovJ, CoordType=)"}[self.legacy_syntax]
+        checks.append(Check("Command syntax", "ok", syntax))
         checks.append(self._pose_check())
         return checks
 
@@ -306,3 +328,9 @@ class DobotDriver(Driver):
             return
         if reply.error_id == 0:
             self._alarm_ids = tuple(int(x) for x in re.findall(r"-?\d+", reply.values))
+
+
+def _syntax_refusal(code: int) -> bool:
+    """-10000 unknown command, -20000 wrong parameter count, -3000X / -5000X parameter type: the controller did
+    not understand the command, so nothing moved and another form may be tried. Range errors (-4000X) are not."""
+    return code in (-10000, -20000) or -39999 <= code <= -30000 or -59999 <= code <= -50000

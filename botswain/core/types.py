@@ -120,7 +120,9 @@ class RobotState:
     tcp_target: Pose
     speed_pct: int
     errors: tuple[int, ...] = ()
-    gripper: float | None = None  # 0 = closed, 1 = open, None = unknown / no gripper
+    gripper: float | None = None  # last command: 0 = closed, 1 = open, None = nothing sent / no gripper
+    gripper_pos: float | None = None  # measured opening 0..1 when the gripper reports it, else None
+    gripper_status: str = ""  # the gripper's own word: "moving", "object caught"..., "" if it reports nothing
     raw_mode: int = -1  # the brand's own mode code, shown in the GUI for debugging
     link_ok: bool = False
     feedback_hz: float = 0.0
@@ -146,6 +148,7 @@ class Capabilities:
     drag_mode: bool
     frames: tuple[str, ...]
     max_tcp_speed_mm_s: float
+    gripper_force: bool = False  # the gripper takes a closing-force setting (SetGripperForce)
 
 
 # ---- commands: the only things the GUI and inputs can put in the worker queue ----
@@ -252,6 +255,13 @@ class Gripper:
 
 
 @dataclass(frozen=True)
+class SetGripperForce:
+    """Closing force for every later close, in % of the gripper's range. Stays set in the gripper."""
+
+    pct: int
+
+
+@dataclass(frozen=True)
 class RequestControl:
     """Take TCP/IP control of the controller (Dobot firmware >= 4.6), instead of switching it in DobotStudio."""
 
@@ -265,5 +275,6 @@ class Diagnose:
 
 Command = (
     Connect | Disconnect | Enable | Disable | ClearError | Stop | SetSpeed
-    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | Diagnose | RequestControl
+    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | SetGripperForce | Diagnose
+    | RequestControl
 )

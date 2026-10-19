@@ -79,6 +79,8 @@ class FakeDobotController:
         self.legacy = False  # behave like the lab CR5's older firmware (positional syntax only)
         self.commands: list[str] = []
         self.gripper_frames: list[list[int]] = []
+        self.gripper_regs: dict[int, int] = {0x0200: 0, 0x0201: 1, 0x0202: 1000}  # DH registers, not initialised
+        self.gripper_object_permille: int | None = None  # set: a close stops here with "object caught"
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -232,6 +234,27 @@ class FakeDobotController:
 
     # ---- the robot ----
 
+    def gripper_modbus(self, frame: list[int]) -> list[int]:
+        """A DH gripper on the tool port: write (06) echoes and sets the register, read (03) answers it.
+        A close stops at a 'caught object' (gripper_object_permille) and reports grip state 2."""
+        reg, value = (frame[2] << 8) | frame[3], (frame[4] << 8) | frame[5]
+        if frame[1] == 0x06:
+            self.gripper_regs[reg] = value
+            if reg == 0x0100:
+                self.gripper_regs[0x0200] = 1
+            if reg == 0x0103:
+                obj = self.gripper_object_permille
+                caught = obj is not None and value < obj
+                self.gripper_regs[0x0202] = obj if caught else value
+                self.gripper_regs[0x0201] = 2 if caught else 1
+            return frame
+        if frame[1] == 0x03:
+            v = self.gripper_regs.get(reg, 0)
+            body = [frame[0], 0x03, 2, v >> 8, v & 0xFF]
+            crc = crc16_modbus(bytes(body))
+            return [*body, crc & 0xFF, crc >> 8]
+        return []
+
     def _packet(self) -> bytes:
         tcp_target = self.tcp if self.jog else self.tcp_target
         return build_packet(
@@ -273,12 +296,16 @@ class FakeDobotController:
                 return "Not Tcp"
             name, pos, kw = parse_command(text)
             if self.legacy:
+                if pos and pos[0].strip() == "-0.000000":  # the lab CR5 reads "-0" as a bad first parameter
+                    return f"-30001,{{}},{text};"
                 if name in ("movj", "movl") and ("joint" in kw or "pose" in kw):
                     return f"-30001,{{}},{text};"
                 if name == "movejog" and "coordtype=" in text:
                     return f"-30002,{{}},{text};"
                 if name == "movejog" and "CoordType=" in text:
                     return f"-40002,{{}},{text};"
+                if name == "movejog" and len(pos) > 1:  # positional frame: the lab CR5's split refusal
+                    return f"-40001,0,{{}},;{text};"
                 if name == "stop":
                     return f"-10000,{{}},{text};"
                 if name == "servop" and kw:
@@ -408,7 +435,8 @@ class FakeDobotController:
                 crc_ok = len(frame) >= 3 and crc16_modbus(bytes(frame[:-2])) == frame[-2] | (frame[-1] << 8)
                 with ctrl._lock:
                     ctrl.gripper_frames.append(frame)
-                self._reply(200, {"result": "ok" if crc_ok else "crc error", "echo": frame})
+                    reply = ctrl.gripper_modbus(frame) if crc_ok else []
+                self._reply(200, {"status": crc_ok, "data": {"value": reply, "index": len(ctrl.gripper_frames)}})
 
         return Handler
 

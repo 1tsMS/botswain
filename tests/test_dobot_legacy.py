@@ -60,7 +60,37 @@ def test_hold_jog_both_dialects(setup):
     assert wait_for(lambda: d.read_state().mode is Mode.JOGGING)
     d.jog_release()
     jogs = [c for c in ctrl.commands if c.startswith("MoveJog(X")]
-    assert jogs[-1] == ("MoveJog(X+,1)" if legacy else "MoveJog(X+,coordtype=1)")
+    assert jogs[-1] == ("MoveJog(X+)" if legacy else "MoveJog(X+,coordtype=1)")
+
+
+def test_joint_and_cartesian_jogs_learn_their_own_form(setup):
+    # Lab CR5: joints took MoveJog(J1+); the Cartesian jog then reused that form's index and sent the refused
+    # MoveJog(Y+,1) forever.
+    ctrl, d, legacy = setup
+    d.jog_hold("J1", 1, "base")
+    assert wait_for(lambda: d.read_state().mode is Mode.JOGGING)
+    d.jog_release()
+    d.jog_hold("Y", 1, "base")
+    assert wait_for(lambda: d.read_state().mode is Mode.JOGGING)
+    d.jog_release()
+    assert wait_for(lambda: d.read_state().mode is Mode.IDLE)
+    before = len(ctrl.commands)
+    d.jog_hold("Y", -1, "base")  # remembered: one command, no probing
+    d.jog_release()
+    assert ctrl.commands[before:] == ["MoveJog(Y-)" if legacy else "MoveJog(Y-,coordtype=1)", "MoveJog()"]
+
+
+def test_refused_jog_leaves_the_link_in_sync(setup):
+    _ctrl, d, legacy = setup
+    if not legacy:
+        pytest.skip("only the old firmware refuses a tool-frame jog in the fake")
+    with pytest.raises(DriverError) as e:
+        d.jog_hold("Z", 1, "tool")  # every tool form refused, the last with the split reply
+    assert e.value.code == -40001
+    assert d.read_state().mode is Mode.IDLE
+    d.jog_release()  # must read its own reply, not the stray echo
+    d.move_to(Joints((5, 0, 90, 0, -90, 0)), "joint")
+    assert wait_for(lambda: d.read_state().joints.values[0] > 4.99, timeout=3)
 
 
 def test_other_refusals_are_not_retried(setup):
@@ -123,3 +153,11 @@ def test_stop_without_any_known_command_fails_loudly():
     finally:
         ctrl.stop()
     assert fc  # module imported for the patch above
+
+
+def test_point_with_negative_zero_joint_moves(setup):
+    # Lab CR5: go to point P1 (J1 saved as -0.0) was refused every time with -30001.
+    _ctrl, d, _ = setup
+    d.move_to(Joints((-0.0, -0.41, 91.69, -6.8e-06, -90.6, 0.82)), "joint")
+    d.move_to(Joints((-0.0, 0.0, 90.0, 0.0, -90.0, 0.0)), "joint")  # second time: the remembered form
+    assert wait_for(lambda: abs(d.read_state().joints.values[2] - 90.0) < 0.01, timeout=3)

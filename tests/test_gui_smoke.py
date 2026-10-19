@@ -177,8 +177,10 @@ def test_teleop_page_starts_and_stops_server(qtbot, make_window, monkeypatch):
     page.toggle_server()
     assert page.server is not None
     qtbot.waitUntil(lambda: str(port) in page.url_label.text(), timeout=1000)
+    assert page.server.token in page.key_label.text()  # typeable key next to the QR code
+    assert not page.qr_label.isHidden() and not page.qr_label.pixmap().isNull()
     page.toggle_server()
-    assert page.server is None
+    assert page.server is None and page.qr_label.isHidden()
 
 
 def test_camera_dock_follows_cameras_page(qtbot, make_window):
@@ -189,3 +191,18 @@ def test_camera_dock_follows_cameras_page(qtbot, make_window):
     w.cameras_page.cameras = [cam]
     w.cameras_page._changed()
     assert len(w.camera_grid.tiles) == 1 and len(w.cameras_page.grid.tiles) == 1
+
+
+def test_scan_button_lists_every_source(qtbot, make_window, monkeypatch):
+    # Lab: pressing Scan listed nothing, because clicked(bool) passed False in as the source list.
+    from botswain.sensors.cameras import CameraSource
+    from botswain.ui.pages import cameras_page
+
+    found = [CameraSource("USB2.0 HD UVC WebCam", 0), CameraSource("DroidCam Source 3", 1),
+             CameraSource("OBS Virtual Camera", 3)]
+    monkeypatch.setattr(cameras_page, "list_sources", lambda: found)
+    _, w = make_window()
+    page = w.cameras_page
+    page.scan_btn.click()
+    items = [page.choice.itemText(i) for i in range(page.choice.count())]
+    assert items == [s.name for s in found] + ["All sources"] and page.show_btn.isEnabled()

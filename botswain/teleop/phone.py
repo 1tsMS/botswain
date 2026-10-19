@@ -75,10 +75,25 @@ else { lines.push("-> open this address in Google Chrome"); done(); }
 
 
 COOKIE = "botswain_key"
+# Pairing key: short enough to type on a phone, no lookalikes (0/O, 1/I/L). 31^6 = 887 million keys, and the
+# server stops accepting keys after MAX_KEY_FAILURES wrong ones, so guessing it over the network is hopeless.
+KEY_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+KEY_LENGTH = 6
+MAX_KEY_FAILURES = 10
 WRONG_LINK = """<!doctype html><meta name=viewport content="width=device-width,initial-scale=1">
-<body style="font:16px sans-serif;padding:16px"><h3>Botswain</h3>
-<p>Open the full address shown on the Teleop page in Botswain (it ends with <code>?k=...</code>).
-The key changes every time the phone server starts.</p>"""
+<body style="font:18px sans-serif;padding:16px"><h3>Botswain</h3>
+<p>{message}</p>
+<form method=get action="/"><input name=k autocomplete=off autocapitalize=characters maxlength=6
+ placeholder="KEY" style="font:28px monospace;width:7em;letter-spacing:.2em;text-transform:uppercase">
+<button style="font:20px sans-serif;margin-left:8px">Open</button></form>
+<p style="color:#666">The key is on the Teleop page in Botswain (or scan its QR code). It changes every time the
+phone server starts.</p>"""
+LOCKED = ("Too many wrong keys: this phone server no longer accepts any key. Stop and start the phone server in "
+          "Botswain to get a new one.")
+
+
+def new_key() -> str:
+    return "".join(secrets.choice(KEY_ALPHABET) for _ in range(KEY_LENGTH))
 
 
 def find_openssl() -> str | None:
@@ -149,8 +164,9 @@ class PhoneServer:
     def __init__(self, on_sample: Callable[[PhoneSample], None], port: int = 4443, host: str = "0.0.0.0") -> None:
         self.on_sample = on_sample
         self.port = port
-        self.token = secrets.token_urlsafe(9)  # new pairing key every time the server starts
+        self.token = new_key()  # new pairing key every time the server starts
         self.refused = 0
+        self.key_failures = 0
         self.clients = 0
         self.samples = 0
         self.bad_messages = 0
@@ -165,9 +181,16 @@ class PhoneServer:
 
         @app.get("/")
         async def index(request: Request) -> HTMLResponse:
-            # Only someone who can read the address in the app gets the page and the session cookie.
-            if not secrets.compare_digest(request.query_params.get("k", ""), self.token):
-                return HTMLResponse(WRONG_LINK, status_code=403)
+            # Only someone who can read the key in the app gets the page and the session cookie.
+            key = request.query_params.get("k", "").strip().upper()
+            if self.key_failures >= MAX_KEY_FAILURES:
+                return HTMLResponse(WRONG_LINK.format(message=LOCKED), status_code=403)
+            if not secrets.compare_digest(key.encode(), self.token.encode()):
+                if key:
+                    self.key_failures += 1
+                    log.warning("phone page: wrong pairing key (%d of %d)", self.key_failures, MAX_KEY_FAILURES)
+                message = "Wrong key, try again." if key else "Type the key shown on the Teleop page in Botswain."
+                return HTMLResponse(WRONG_LINK.format(message=message), status_code=403)
             response = HTMLResponse(page)
             response.set_cookie(COOKIE, self.token, httponly=True, secure=True, samesite="strict")
             return response

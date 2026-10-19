@@ -20,6 +20,7 @@ dependencies = [
     "transforms3d>=0.4.2",
     "teleop>=0.1.5",
     "cv2-enumerate-cameras>=1.4",
+    "segno>=1.6",  # QR code of the phone link
 ]
 
 [project.optional-dependencies]

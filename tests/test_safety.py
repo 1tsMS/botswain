@@ -73,6 +73,14 @@ def test_gripper_needs_link_not_enable(gate):
     assert isinstance(gate.check(Gripper(True), make_state(Mode.DISCONNECTED, link_ok=False)), Rejected)
 
 
+def test_gripper_force_needs_link_and_range(gate):
+    from botswain.core.types import SetGripperForce
+
+    assert isinstance(gate.check(SetGripperForce(60), make_state(Mode.DISABLED)), Allowed)
+    assert isinstance(gate.check(SetGripperForce(60), make_state(Mode.DISCONNECTED, link_ok=False)), Rejected)
+    assert gate.check(SetGripperForce(10), make_state()).rule == 'invalid'
+
+
 def test_stream_allowed_while_streaming(gate):
     cmd = StreamTarget(make_state().tcp, now_ns(), "test", True)
     assert isinstance(gate.check(cmd, make_state(Mode.STREAMING)), Allowed)

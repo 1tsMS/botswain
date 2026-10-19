@@ -106,3 +106,23 @@ def test_call_ok_raises_with_meaning():
     with pytest.raises(DriverError) as e:
         c.call_ok("EnableRobot()")
     assert e.value.code == -2 and "alarm" in e.value.message and e.value.hint
+
+
+def test_v3_split_refusal_does_not_desync():
+    # Lab CR5, 2026-10-19: MoveJog(Y+,1) was answered '-40001,0,{},;' and then the echo on its own. The echo used
+    # to be read as the reply to the next command, so every later reply was off by one.
+    c = client_for([
+        [(b"-40001,0,{},;", 0), (b"MoveJog(Y+,1);", 0.05)],
+        [(b"0,{},MoveJog();", 0)],
+        [(b"0,{5},RobotMode();", 0)],
+    ])
+    r = c.call("MoveJog(Y+,1)")
+    assert r.error_id == -40001 and r.echo == ""
+    time.sleep(0.1)  # the bare echo is now waiting in the buffer
+    assert c.call("MoveJog()").error_id == 0
+    assert c.call("RobotMode()").values == "5"
+
+
+def test_parse_reply_extra_number_before_values():
+    r = parse_reply("-40001,0,{},;")
+    assert r.error_id == -40001 and r.values == "" and r.echo == ""

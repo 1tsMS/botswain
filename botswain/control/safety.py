@@ -38,6 +38,7 @@ from botswain.core.types import (
     Pose,
     RequestControl,
     RobotState,
+    SetGripperForce,
     SetSpeed,
     Stop,
     StreamTarget,
@@ -113,10 +114,12 @@ class SafetyGate:
             return Allowed(cmd)
         if isinstance(cmd, SetSpeed):
             return self._speed(cmd)
-        if isinstance(cmd, Gripper):
+        if isinstance(cmd, Gripper | SetGripperForce):
             # The gripper may be tested while the arm is disabled, but needs a live link.
             if state.mode is Mode.DISCONNECTED or not state.link_ok:
                 return Rejected("ready", "not connected")
+            if isinstance(cmd, SetGripperForce) and not 20 <= cmd.pct <= 100:
+                return Rejected("invalid", f"gripper force must be 20..100 %, got {cmd.pct}")
             return Allowed(cmd)
         bad = _non_finite(cmd)
         if bad:

@@ -27,7 +27,8 @@ class CamerasPage(QWidget):
         lay.setContentsMargins(8, 8, 8, 8)
         panel = Panel("Cameras", "any video source: webcam, DroidCam, OBS")
         row = QHBoxLayout()
-        self.scan_btn = self._button("Scan", "btn", self.scan)
+        # Not self.scan directly: clicked(bool) would pass False as `sources`, and Scan then crashed in silence.
+        self.scan_btn = self._button("Scan", "btn", lambda: self.scan())
         self.choice = QComboBox()
         self.choice.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.choice.setMinimumWidth(240)

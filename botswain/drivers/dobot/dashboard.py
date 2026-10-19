@@ -60,7 +60,11 @@ class Reply:
         return [float(x) for x in re.findall(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?", self.values)]
 
 
-_HEAD = re.compile(r"\s*(-?\d+)\s*,\s*\{")
+# ErrorID, then '{'. The lab CR5 (V3 firmware) refuses some commands with an extra number before the braces
+# and an empty echo: '-40001,0,{},;' followed by the echo on its own, 'MoveJog(Y+,1);'.
+_HEAD = re.compile(r"\s*(-?\d+)\s*,(?:\s*-?\d+\s*,)*\s*\{")
+# A bare echo with no ErrorID: the second half of the split reply above. Never a reply on its own.
+_BARE_ECHO = re.compile(r"\s*[A-Za-z]\w*\(.*\)\s*;?\s*$", re.DOTALL)
 
 
 def parse_reply(text: str) -> Reply:
@@ -182,6 +186,9 @@ class DashboardClient:
     def _to_reply(self, text: str, name: str) -> Reply | None:
         if "not tcp" in text.lower():
             return Reply(NOT_TCP, "", text)
+        if _BARE_ECHO.match(text):
+            log.debug("dropped a bare echo %r while waiting for %s", text, name)
+            return None
         try:
             reply = parse_reply(text)
         except ValueError as e:

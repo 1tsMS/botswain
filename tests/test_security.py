@@ -56,6 +56,28 @@ def test_page_needs_the_pairing_key(server):
     assert srv.token in srv.urls[0]
 
 
+
+def test_key_is_short_typeable_and_case_insensitive(server):
+    # Lab: typing the old 12-char key (l/I/-/_ soup) on a phone failed. Now 6 chars, no lookalikes, any case.
+    srv, _ = server
+    assert len(srv.token) == 6 and not set(srv.token) & set("01OIL")
+    with https_get(f"https://127.0.0.1:{srv.port}/?k={srv.token.lower()}%20") as r:
+        assert r.status == 200 and srv.token in r.headers["set-cookie"]
+    with pytest.raises(urllib.error.HTTPError) as e:  # no key: a form to type it in
+        https_get(f"https://127.0.0.1:{srv.port}/")
+    assert b"<form" in e.value.read()
+
+
+def test_wrong_keys_lock_the_server(server):
+    srv, _ = server
+    wrong = "AAAAAA" if srv.token != "AAAAAA" else "BBBBBB"
+    for _ in range(10):
+        with pytest.raises(urllib.error.HTTPError):
+            https_get(f"https://127.0.0.1:{srv.port}/?k={wrong}")
+    with pytest.raises(urllib.error.HTTPError) as e:  # now even the right key is refused until a restart
+        https_get(f"https://127.0.0.1:{srv.port}/?k={srv.token}")
+    assert b"Too many wrong keys" in e.value.read() and srv.key_failures == 10
+
 def test_websocket_without_key_is_refused(server):
     srv, got = server
     with pytest.raises(websocket.WebSocketException):

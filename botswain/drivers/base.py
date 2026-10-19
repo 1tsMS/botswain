@@ -84,6 +84,9 @@ class Driver(ABC):
     def gripper(self, open: bool) -> None:
         raise DriverError(-1, "no gripper on this driver")
 
+    def set_gripper_force(self, pct: int) -> None:
+        raise DriverError(-1, "this gripper has no force setting")
+
     def request_control(self) -> None:
         raise DriverError(-1, "this robot has no 'take control' command")
 

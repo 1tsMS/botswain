@@ -31,10 +31,12 @@ from botswain.core.types import (
     JogRelease,
     JogStep,
     JogTick,
+    Mode,
     MoveTo,
     Pose,
     RequestControl,
     RobotState,
+    SetGripperForce,
     SetSpeed,
     Stop,
     StreamTarget,
@@ -44,8 +46,9 @@ from botswain.drivers.base import Check, Driver, DriverError
 log = logging.getLogger(__name__)
 
 HOLD_TIMEOUT_NS = 150_000_000  # no "still held" tick for this long -> release the hold-jog
-RULE_LOG_PERIOD_NS = 1_000_000_000
-STOP_LOOKAHEAD_S = 0.06  # release a hold-jog this long before it would reach a limit (stop latency)  # at most one log line per second per gate rule
+RULE_LOG_PERIOD_NS = 1_000_000_000  # at most one log line per second per gate rule
+STOP_LOOKAHEAD_S = 0.06  # release a hold-jog this long before it would reach a limit (stop latency)
+HOLD_IDLE_NS = 300_000_000  # robot idle this long into a hold-jog: the controller ended the jog by itself
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,8 @@ class RobotWorker:
         self._connected = False
         self._hold_tick_ns: int | None = None  # last "still held" time while a hold-jog runs, else None
         self._hold_cmd: JogHold | None = None
+        self._hold_start_ns = 0
+        self._hold_idle_logged = False
         self._prev_tcp: tuple[float, float, float, int] | None = None  # for the TCP speed estimate
         self.stream_period_ns = int(gate.period_s * 1e9)
         self._stream_latest: StreamTarget | None = None  # newest teleop target, replaced by every new sample
@@ -244,8 +249,9 @@ class RobotWorker:
                 self._call("jog_step", d.jog_step, axis, delta, frame)
             case JogHold(axis=axis, direction=direction, frame=frame):
                 if self._call("jog_hold", d.jog_hold, axis, direction, frame):
-                    self._hold_tick_ns = now_ns()
+                    self._hold_tick_ns = self._hold_start_ns = now_ns()
                     self._hold_cmd = cmd
+                    self._hold_idle_logged = False
             case JogRelease():
                 # Always sent, even if we think no hold is active: a release that does nothing is harmless.
                 self._hold_tick_ns = None
@@ -257,6 +263,9 @@ class RobotWorker:
                 self._log("error", "StreamTarget must go through worker.stream(), not the queue")
             case Gripper(open=is_open):
                 self._call("gripper", d.gripper, is_open)
+            case SetGripperForce(pct=pct):
+                if self._call("gripper_force", d.set_gripper_force, pct):
+                    self._log("info", f"gripper closing force {pct} %")
             case RequestControl():
                 if self._call("request_control", d.request_control):
                     self._log("info", "controller control taken (RequestControl)")
@@ -280,6 +289,11 @@ class RobotWorker:
             self._log("warn", "hold-jog released by watchdog: no 'still held' tick for 150 ms")
             self._call("jog_release", self.driver.jog_release)
             return
+        if (state.mode is Mode.IDLE and not self._hold_idle_logged
+                and now_ns() - self._hold_start_ns > HOLD_IDLE_NS):
+            # Diagnosis only: nothing is re-sent. Tells "the controller stopped the jog" apart from a release.
+            self._hold_idle_logged = True
+            self._log("warn", "the robot stopped the hold-jog by itself (idle while the key is still held)")
         # Predictive: margin = 1 mm + distance covered during the stop latency, from the measured TCP speed.
         x, y, z = state.tcp.xyz
         speed = 0.0

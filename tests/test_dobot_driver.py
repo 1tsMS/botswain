@@ -162,8 +162,8 @@ def test_gripper_frames_reach_controller(ctrl, drv):
     connected(drv)
     drv.gripper(True)
     drv.gripper(False)
-    assert ctrl.gripper_frames == [[1, 6, 1, 0, 0, 1, 73, 246], [1, 6, 1, 3, 3, 232, 120, 136],
-                                   [1, 6, 1, 3, 0, 0, 120, 54]]
+    writes = [f for f in ctrl.gripper_frames if f[1] == 0x06]  # reads (03) are the status poll
+    assert writes == [[1, 6, 1, 0, 0, 1, 73, 246], [1, 6, 1, 3, 3, 232, 120, 136], [1, 6, 1, 3, 0, 0, 120, 54]]
     assert drv.read_state().gripper == 0.0
 
 
@@ -186,3 +186,24 @@ def test_motion_port_can_be_separate(ctrl):
         d.disconnect()
     finally:
         c2.stop()
+
+
+def test_speed_control_scales_to_the_controller_max():
+    # Dobot's SpeedFactor 10 % jogs far faster than the gamepad's 10 %; the YAML sets what 100 % means.
+    from dataclasses import replace
+
+    ctrl = FakeDobotController()
+    ctrl.start()
+    cfg = dobot_cfg(ctrl)
+    d = DobotDriver(replace(cfg, limits=replace(cfg.limits, controller_speed_max_pct=20)))
+    try:
+        d.connect()
+        d.set_speed(10)
+        d.set_speed(100)
+        d.set_speed(1)
+        assert [c for c in ctrl.commands if c.startswith("SpeedFactor")] == [
+            "SpeedFactor(2)", "SpeedFactor(2)", "SpeedFactor(20)", "SpeedFactor(1)"]
+        assert d.read_state().speed_pct == 1  # the GUI keeps showing its own %
+    finally:
+        d.disconnect()
+        ctrl.stop()

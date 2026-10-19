@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
 from collections.abc import Callable
 
+import segno
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -13,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSlider,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -45,9 +49,22 @@ class TeleopPage(QWidget):
         self.start_btn = set_role(QPushButton("Start phone server"), "primary")
         self.start_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.start_btn.clicked.connect(self.toggle_server)
+        # Scan the QR code with the phone camera, or open https://<ip>:4443 and type the key.
+        self.qr_label = QLabel()
+        self.qr_label.setVisible(False)
+        self.key_label = QLabel("")
+        self.key_label.setFont(mono_font(28))
+        self.key_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.url_label = QLabel("Server off")
-        self.url_label.setFont(mono_font(18))
+        self.url_label.setFont(mono_font(14))
         self.url_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        link_row = QHBoxLayout()
+        link_row.addWidget(self.qr_label, 0, Qt.AlignmentFlag.AlignTop)
+        link_text = QVBoxLayout()
+        link_text.addWidget(self.key_label)
+        link_text.addWidget(self.url_label)
+        link_text.addStretch(1)
+        link_row.addLayout(link_text, 1)
         self.status_label = set_role(QLabel(""), "lab")
         notes = set_role(QLabel(
             "Android Chrome on a phone with ARCore. Same WiFi as this laptop. Accept the certificate warning, "
@@ -59,7 +76,9 @@ class TeleopPage(QWidget):
         self.cert_btn.clicked.connect(self.make_cert)
         self.cert_label = set_role(QLabel(""), "lab")
         self.cert_label.setWordWrap(True)
-        for w in (self.start_btn, self.url_label, self.status_label, notes, self.cert_btn, self.cert_label):
+        phone.body_layout.addWidget(self.start_btn)
+        phone.body_layout.addLayout(link_row)
+        for w in (self.status_label, notes, self.cert_btn, self.cert_label):
             phone.body_layout.addWidget(w)
         phone.body_layout.addStretch(1)
 
@@ -136,6 +155,7 @@ class TeleopPage(QWidget):
                 self._log("error", f"{e}. Is another program using port {PORT}?")
                 return
             self.server = server
+            self._show_link(server)
             note = " (shared package certificate)" if server.cert_is_shared else ""
             self._log("info", f"phone server running: {', '.join(server.urls)}{note}")
         else:
@@ -147,9 +167,21 @@ class TeleopPage(QWidget):
             return
         self.server.stop()
         self.server = None
+        self.qr_label.setVisible(False)
+        self.key_label.setText("")
         if self.worker.latest_state().mode is Mode.STREAMING:
             self.worker.request_stop()
         self._log("info", "phone server stopped")
+
+    def _show_link(self, server: PhoneServer) -> None:
+        """QR code of the first address (Wi-Fi first, robot LAN last) and the key to type by hand."""
+        buf = io.BytesIO()
+        segno.make(server.urls[0], error="m").save(buf, kind="png", scale=5, border=2)
+        pixmap = QPixmap()
+        pixmap.loadFromData(buf.getvalue(), "PNG")
+        self.qr_label.setPixmap(pixmap)
+        self.qr_label.setVisible(True)
+        self.key_label.setText(f"Key {server.token}")
 
     def _refresh(self) -> None:
         running = self.server is not None

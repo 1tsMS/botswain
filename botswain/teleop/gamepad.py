@@ -7,7 +7,7 @@ Mapping (robot base frame, turned by the same "facing" setting as the phone):
   hold LB      deadman: the arm moves only while it is held; release = stop
   left stick   X / Y          triggers    RT up, LT down (Z)
   right stick  Rz (x), Ry (y)  RB          slow mode (x0.25)
-  A / B        gripper open / close        D-pad up/down   speed +/-10 %
+  A            gripper open/close toggle   D-pad up/down   speed +/-10 %
   Start        record: start or save episode   Back   discard episode   X   save point
 
 Sticks set a velocity; the target pose is integrated from the measured pose and goes to worker.stream(),
@@ -188,9 +188,10 @@ class GamepadTeleop:
 
     def _button(self, name: str) -> None:
         if name == "a":
-            self.worker.submit(Gripper(True))
-        elif name == "b":
-            self.worker.submit(Gripper(False))
+            # Toggle from the robot's gripper state, so GUI gripper buttons in between keep it in step.
+            # Unknown state (nothing sent yet): open first, the harmless direction.
+            g = self.worker.latest_state().gripper
+            self.worker.submit(Gripper(g is None or g < 0.5))
         elif name == "up":
             self.speed_scale = min(1.0, round(self.speed_scale + 0.1, 2))
         elif name == "down":

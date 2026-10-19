@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import time
 
 from PySide6.QtCore import QEvent, QObject, Qt
@@ -12,6 +13,7 @@ from botswain.control.points import PointStore
 from botswain.control.program import ProgramRunner
 from botswain.control.worker import RobotWorker
 from botswain.core.config import RobotConfig
+from botswain.core.log import LEVELS
 from botswain.core.types import (
     ClearError,
     Connect,
@@ -39,6 +41,7 @@ from botswain.ui.status_bar import StatusBar
 from botswain.ui.toolbar import TopToolbar
 from botswain.ui.widgets.camera_tile import CameraGrid
 
+log = logging.getLogger(__name__)
 STOP_KEYS = (Qt.Key.Key_Space, Qt.Key.Key_Escape)
 
 
@@ -201,6 +204,8 @@ class MainWindow(QMainWindow):
         self.worker.submit(cmd)
 
     def _log(self, level: str, text: str) -> None:
+        """GUI-side messages (pages, cameras, programs) go to the log file too, like the worker's do."""
+        log.log(LEVELS.get(level, logging.INFO), text)
         self.log_dock.append(level, text)
 
     def _load_points(self, cfg: RobotConfig) -> PointStore:

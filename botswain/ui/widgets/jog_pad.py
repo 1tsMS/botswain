@@ -70,6 +70,10 @@ class JogPad(QWidget):
             grid.addWidget(b, row, col + i)
             self.keys[(axis, sign)] = b
 
+    @property
+    def holding(self) -> bool:
+        return self._holding
+
     def set_step_size(self, step: float | None) -> None:
         if self._holding:
             self._released()

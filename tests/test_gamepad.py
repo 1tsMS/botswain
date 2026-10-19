@@ -72,10 +72,14 @@ def test_buttons(worker):
     assert t.speed_scale == pytest.approx(0.1)
     actions = []
     t.on_action = actions.append
-    t.step(pad("a"), 0.02)
+    t.step(pad("a"), 0.02)  # unknown state: opens first
+    assert wait_for(lambda: worker.latest_state().gripper == 1.0)
+    t.step(pad("a"), 0.02)  # still held: no second toggle
     t.step(pad(), 0.02)
-    t.step(pad("b"), 0.02)
+    t.step(pad("a"), 0.02)  # next press closes
     assert wait_for(lambda: worker.latest_state().gripper == 0.0)
+    t.step(pad("b"), 0.02)  # B no longer does anything
+    t.step(pad(), 0.02)
     for name in ("up", "up", "down"):
         t.step(pad(name), 0.02)
         t.step(pad(), 0.02)

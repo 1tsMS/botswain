@@ -109,6 +109,14 @@ Every clamp and refusal is written to the log and counted in the status bar.
 **Save point** (toolbar) or **Save current pose** (Points page) stores the pose and joints in
 `robots/<robot>.points.json`. **Go to** (or double-click) moves there with a joint move through the gate.
 
+**Home** (toolbar, or the Jog page next to Frame) is a joint move to `home_joints_deg`; it stays greyed out until the
+robot YAML says `home_confirmed: true`.
+
+**Gripper** (DH, Jog page): under Open / Close the gripper's own status (moving, at position, object caught,
+object dropped) and its measured opening. **Close force** (20-100 %) is kept in the gripper and used by every close,
+from the buttons, the gamepad or the phone. A DH PGE has no force sensor: it closes until its motor reaches that
+force, then holds and reports *object caught*.
+
 ### 8. Robot view
 3D model following the robot. Drag to orbit (it stays upright), scroll to zoom, **Reset view** to go back.
 Chips: **Safety box** (shows and enforces the box), **Target**. The gripper drawn on the flange is a simple
@@ -139,7 +147,7 @@ Teleop page > **Use game controller**. The arm moves only while **LB** is held.
 | RT / LT | Z up / down |
 | right stick | Rz / Ry |
 | RB | slow mode (quarter speed) |
-| A / B | gripper open / close |
+| A | gripper: open if closed, close if open |
 | D-pad up / down | speed +/- 10 % |
 | **Start** | recording: start an episode, or save the running one |
 | **Back** | discard the running episode |

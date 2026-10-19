@@ -13,7 +13,7 @@ from botswain.ui.theme import mono_font, set_role
 from botswain.ui.widgets.panel import Panel
 
 MAP_TEXT = ("Hold LB to move (let go = stop) · left stick X/Y · RT up / LT down · right stick Rz / Ry · "
-            "RB slow · A open / B close gripper · D-pad speed · Start record/save episode · Back discard · "
+            "RB slow · A gripper open/close · D-pad speed · Start record/save episode · Back discard · "
             "X save point")
 
 

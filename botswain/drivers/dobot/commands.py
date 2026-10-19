@@ -13,7 +13,10 @@ from botswain.core.types import Joints, Pose
 
 
 def _f(v: float) -> str:
-    return f"{float(v):.6f}"
+    # Never "-0.000000": the lab CR5 refused JointMovJ(-0.000000,...) as a bad parameter 1 (-30001). A joint
+    # resting at 0 often reads back as -0.0, so saved points and "Copy current" produced exactly that.
+    # Rounding first also turns -0.0000001 into plain 0; adding 0.0 turns -0.0 into 0.0.
+    return f"{round(float(v), 6) + 0.0:.6f}"
 
 
 def _six(values: Sequence[float], what: str) -> str:
@@ -149,16 +152,22 @@ def mov_l_pose_legacy(p: Pose) -> str:
 
 
 def move_jog_legacy(axis: str, coordtype: int) -> list[str]:
-    """Older forms to try in order (Dobot V3 API: positional coord_type, 1 user / 2 tool, default user 0).
-    Joint axes take no frame. A base-frame Cartesian jog may also go without one (V3 default: user 0 = base)."""
+    """Older MoveJog forms to try in order after the V4.6 one. Each refusal moves nothing.
+
+    Dobot's V3 documents disagree on the frame number: the V3 Python SDK says 1 user / 2 tool, the CR protocol
+    page says 0 user / 1 joint / 2 tool. The lab CR5 refused CoordType=1 (-40002) and the positional
+    `MoveJog(X+,1)` (-40001, split reply), so both numberings are tried. Joint axes take no frame. A base jog
+    may also go bare: both documents default to user frame 0 (= base) or to a joint frame that refuses X+;
+    neither defaults to the tool frame, so a bare form can never jog in the wrong frame.
+    """
     if coordtype not in (0, 1, 2):
         raise ValueError(f"coordtype must be 0, 1 or 2, got {coordtype}")
     if coordtype == 0:
         return [f"MoveJog({axis})"]
-    forms = [f"MoveJog({axis},{coordtype})"]
-    if coordtype == 1:
-        forms.append(f"MoveJog({axis})")
-    return forms
+    if coordtype == 2:
+        return [f"MoveJog({axis},CoordType=2,User=0,Tool=0)", f"MoveJog({axis},2)"]
+    return [f"MoveJog({axis},CoordType=1,User=0,Tool=0)", f"MoveJog({axis},CoordType=0,User=0,Tool=0)",
+            f"MoveJog({axis})", f"MoveJog({axis},1)"]
 
 
 def servo_p_legacy(p: Pose) -> str:

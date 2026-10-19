@@ -5,6 +5,7 @@ connection: {ip: 192.168.5.1, dashboard_port: 29999, motion_port: 29999, feedbac
 model: {urdf: ../assets/dobot_cr5/cr5_robot.urdf}
 limits:
   speed_cap_pct: 100
+  controller_speed_max_pct: 20  # speed control 100 % = Dobot SpeedFactor 20 (10 % -> 2); tune in the lab
   box_enabled: false  # switch on in the Robot view (Safety box)
   box_mm: {x: [-632, -332], y: [-286, 14], z: [334, 634]}  # +-150 mm around the Phone2Act start pose
   joints_deg: [[-360, 360], [-360, 360], [-160, 160], [-360, 360], [-360, 360], [-360, 360]]
@@ -15,4 +16,4 @@ limits:
 stream: {period_s: 0.03, aheadtime: 50, gain: 500}
 gripper: {type: dh_modbus, slave: 1, baud: 115200}
 home_joints_deg: [0, 0, 90, 0, -90, 0]
-home_confirmed: false  # read the real home angles off the pendant in the lab, then set true
+home_confirmed: true  # confirmed by MS in the lab 2026-10-19 (0, 0, 90, 0, -90, 0)

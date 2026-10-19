@@ -22,7 +22,8 @@ def test_config_loads_cr5():
     assert cfg.connection.ip == "192.168.5.1"
     assert cfg.model_urdf.is_absolute() and cfg.model_urdf.name == "cr5_robot.urdf"
     assert cfg.model_urdf.parent.name == "dobot_cr5"
-    assert cfg.home_confirmed is False
+    assert cfg.home_confirmed is True and cfg.home_joints_deg == (0, 0, 90, 0, -90, 0)  # confirmed in the lab
+    assert cfg.limits.controller_speed_max_pct == 20
 
 
 def test_config_loads_fake():

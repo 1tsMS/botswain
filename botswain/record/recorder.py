@@ -139,7 +139,8 @@ class Recorder:
     def sample(self) -> dict:
         s = self.worker.latest_state()
         c = self.worker.commanded
-        grip_meas = s.gripper if s.gripper is not None else np.nan
+        grip = s.gripper_pos if s.gripper_pos is not None else s.gripper  # measured when the gripper reports it
+        grip_meas = grip if grip is not None else np.nan
         grip_cmd = np.nan if c.gripper_open is None else float(c.gripper_open)
         sent = c.sent or s.tcp_target  # nothing commanded yet: the controller's own target
         raw = c.raw or sent

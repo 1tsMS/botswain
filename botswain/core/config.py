@@ -40,6 +40,9 @@ class LimitsCfg:
     teleport_mm: float
     stale_ms: float
     box_enabled: bool = False  # the GUI can switch the box on and off at runtime
+    # The speed control's 100 % sends this controller speed factor; lower % scale down linearly. Dobot's own
+    # SpeedFactor is a share of the arm's full speed, so its 10 % jogs much faster than the gamepad's 10 %.
+    controller_speed_max_pct: int = 100
 
 
 @dataclass(frozen=True)
@@ -137,7 +140,7 @@ def _limits(d: dict) -> LimitsCfg:
             unknown = sorted(set(d) - set(LIMIT_KEYS))
             extra = f" (unknown keys here: {', '.join(unknown)}; typo?)" if unknown else ""
             raise ConfigError(w + key, "missing, every limit must be set" + extra)
-    _no_unknown_keys(d, {*LIMIT_KEYS, "box_enabled"}, w)
+    _no_unknown_keys(d, {*LIMIT_KEYS, "box_enabled", "controller_speed_max_pct"}, w)
     box_enabled = d.get("box_enabled", False)
     if not isinstance(box_enabled, bool):
         raise ConfigError(w + "box_enabled", "must be true or false")
@@ -145,6 +148,9 @@ def _limits(d: dict) -> LimitsCfg:
     cap = _number(d, "speed_cap_pct", w, integer=True)
     if not 1 <= cap <= 100:
         raise ConfigError(w + "speed_cap_pct", f"must be 1..100, got {cap}")
+    ctrl_max = _number(d, "controller_speed_max_pct", w, integer=True) if "controller_speed_max_pct" in d else 100
+    if not 1 <= ctrl_max <= 100:
+        raise ConfigError(w + "controller_speed_max_pct", f"must be 1..100, got {ctrl_max}")
 
     box = _section(d, "box_mm", w)
     _no_unknown_keys(box, {"x", "y", "z"}, w + "box_mm.")
@@ -167,6 +173,7 @@ def _limits(d: dict) -> LimitsCfg:
         teleport_mm=_number(d, "teleport_mm", w),
         stale_ms=_number(d, "stale_ms", w),
         box_enabled=box_enabled,
+        controller_speed_max_pct=int(ctrl_max),
     )
 
 

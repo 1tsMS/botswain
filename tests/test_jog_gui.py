@@ -230,3 +230,63 @@ def test_episode_bar_lives_in_episodes_tab(qtbot, rig):
         assert not w.episode_bar.start_btn.isEnabled()
     else:
         assert w.episode_bar.start_btn.isEnabled() and not w.episode_bar.save_btn.isEnabled()
+
+
+def test_fields_go_live_after_move_to_target(qtbot, rig):
+    # Lab: after typing home angles and moving, the fields stayed frozen on the typed numbers.
+    worker, w, _, _ = rig
+    ready(qtbot, worker, w)
+    page = w.jog_page
+    page.edit_btn.click()
+    page.copy_btn.click()
+    page.pose_fields.joint_edits["J1"].setText("8")
+    page.pose_fields.joint_edits["J1"].textEdited.emit("8")
+    page.move_btn.click()
+    assert not page.edit_btn.isChecked() and not page.pose_fields.editing
+    qtbot.waitUntil(lambda: abs(float(page.pose_fields.joint_edits["J1"].text()) - 8.0) < 0.01, timeout=3000)
+
+
+def test_hold_survives_a_running_mode(qtbot, rig):
+    # Older Dobot firmware may report a MoveJog as mode 7 (running): the hold must not be dropped for it.
+    from dataclasses import replace
+
+    worker, w, sent, _ = rig
+    ready(qtbot, worker, w)
+    page = w.jog_page
+    page.step_selector.buttons[None].click()
+    key = page.jog_pad.keys[("J1", 1)]
+    qtbot.mousePress(key, Qt.MouseButton.LeftButton)
+    page.set_state(replace(worker.latest_state(), mode=Mode.MOVING))
+    assert page.jog_pad.holding and key.isEnabled() and of(sent, JogRelease) == []
+    page.set_state(replace(worker.latest_state(), mode=Mode.ERROR))  # a real problem still lets go
+    assert not page.jog_pad.holding and of(sent, JogRelease)
+    qtbot.mouseRelease(key, Qt.MouseButton.LeftButton)
+
+
+def test_jog_page_home_button(qtbot, rig):
+    worker, w, sent, _ = rig
+    ready(qtbot, worker, w)
+    btn = w.jog_page.home_btn
+    qtbot.waitUntil(btn.isEnabled, timeout=1000)
+    btn.click()
+    assert of(sent, MoveTo) == [MoveTo(Joints((0, 0, 90, 0, -90, 0)), "joint")]
+
+
+
+def test_gripper_close_uses_the_force_box(qtbot, rig):
+    from botswain.core.types import SetGripperForce
+
+    worker, w, sent, _ = rig
+    ready(qtbot, worker, w)
+    page = w.jog_page
+    page.gripper_close_btn.click()  # first close: the 50 % shown in the box goes first
+    page.force_box.setValue(80)  # a change is sent at once, for gamepad and phone closes too
+    page.gripper_close_btn.click()
+    grip = [c for c in sent if isinstance(c, SetGripperForce | Gripper)]
+    assert grip == [SetGripperForce(50), Gripper(False), SetGripperForce(80), Gripper(False)]
+    assert wait_for_state(qtbot, lambda: "at position" in page.gripper_status.text())
+
+
+def wait_for_state(qtbot, cond):
+    qtbot.waitUntil(cond, timeout=2000)
+    return True

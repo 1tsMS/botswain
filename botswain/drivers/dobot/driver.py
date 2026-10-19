@@ -67,6 +67,7 @@ class DobotDriver(Driver):
         self._gripper_ready = False
         self._gripper_pos: float | None = None
         self.legacy_syntax: bool | None = None  # None = not known yet, learned from the first refusal
+        self._forms: dict[str, int] = {}  # command kind -> index of the form this controller accepts
 
     @property
     def latency_ms(self) -> float | None:
@@ -164,16 +165,35 @@ class DobotDriver(Driver):
         if not self._connected:
             return
         failures = []
-        for client, text in ((self._dash, cmd.move_jog(None)), (self._dash, cmd.stop())):
+        try:
+            reply = self._dash.call(cmd.move_jog(None))  # ends a hold-jog in every firmware
+            if reply.error_id != 0:
+                log.info("MoveJog() answered %d (no jog running)", reply.error_id)
+        except DriverError as e:
+            failures.append(f"MoveJog(): {e.message}")
+        # Stop() on V4, ResetRobot() on V3 firmware: the command that clears the motion queue and streams.
+        stop_forms = [cmd.stop(), cmd.reset_robot()]
+        if self._forms.get("stop") is not None:
+            stop_forms = [stop_forms[self._forms["stop"]]]
+        for i, text in enumerate(stop_forms):
             try:
-                reply = client.call(text)
-                if reply.error_id != 0:
-                    log.info("%s answered %d (nothing to stop)", text, reply.error_id)
+                reply = self._dash.call(text)
             except DriverError as e:
                 failures.append(f"{text}: {e.message}")
+                break
+            if reply.error_id == -10000 and i < len(stop_forms) - 1:
+                log.warning("%s unknown on this controller, sending %s", text, stop_forms[i + 1])
+                continue
+            if reply.error_id == -10000:
+                failures.append(f"{text}: unknown command on this controller")
+            else:
+                self._forms.setdefault("stop", [cmd.stop(), cmd.reset_robot()].index(text))
+                if reply.error_id != 0:
+                    log.info("%s answered %d (nothing to stop)", text, reply.error_id)
+            break
         if failures:
             raise DriverError(NO_LINK, "STOP could not be sent: " + "; ".join(failures),
-                              "use the physical e-stop, then check the cable")
+                              "use the physical e-stop, then check the cable and the controller")
 
     def set_speed(self, pct: int) -> None:
         self._ok(self._dash, cmd.speed_factor(pct))
@@ -201,24 +221,34 @@ class DobotDriver(Driver):
         sign = "+" if direction > 0 else "-"
         coordtype = 0 if is_joint_axis(axis) else COORD_FRAME[frame]
         self._dialect(self._dash, cmd.move_jog(f"{axis}{sign}", coordtype),
-                      cmd.move_jog_legacy(f"{axis}{sign}", coordtype))
+                      cmd.move_jog_legacy(f"{axis}{sign}", coordtype), kind="jog", range_too=True)
 
-    def _dialect(self, client: DashboardClient, modern: str, legacy: str) -> None:
-        """Send the V4.6 keyword form; if the controller refuses it as a syntax error (nothing moved), send
-        the older positional form instead and remember which one this controller speaks."""
-        if self.legacy_syntax is not True:
+    def _dialect(self, client: DashboardClient, modern: str, legacy: str | list[str], kind: str = "",
+                 range_too: bool = False) -> None:
+        """Send the V4.6 keyword form; if the controller refuses it as not understood (nothing moved), try the
+        older forms in order and remember what worked. range_too: a parameter-range refusal on parameter 2+
+        also means "not this form" (old MoveJog reads an unknown keyword as an out-of-range value)."""
+        forms = [modern, *([legacy] if isinstance(legacy, str) else legacy)]
+        known = self._forms.get(kind or modern.split("(")[0])
+        if known is not None:
+            self._ok(client, forms[known])
+            return
+        for i, text in enumerate(forms):
             try:
-                self._ok(client, modern)
-                self.legacy_syntax = False
-                return
+                self._ok(client, text)
             except DriverError as e:
-                if self.legacy_syntax is False or not _syntax_refusal(e.code):
+                last = i == len(forms) - 1
+                if last or not (_syntax_refusal(e.code) or (range_too and -49999 <= e.code <= -40002)):
                     raise
-                log.warning("%s refused as syntax (%d), trying the older command form", modern, e.code)
-        self._ok(client, legacy)
-        if self.legacy_syntax is not True:
-            self.legacy_syntax = True
-            log.warning("this controller uses the older Dobot command syntax (JointMovJ, CoordType=...)")
+                log.warning("%s not understood (%d), trying the next form", text, e.code)
+                continue
+            self._forms[kind or modern.split("(")[0]] = i
+            if i > 0:
+                self.legacy_syntax = True
+                log.warning("this controller uses the older Dobot command form: %s", text)
+            elif self.legacy_syntax is None:
+                self.legacy_syntax = False
+            return
 
     def jog_release(self) -> None:
         self._ok(self._dash, cmd.move_jog(None))
@@ -226,7 +256,8 @@ class DobotDriver(Driver):
     def stream_target(self, pose: Pose) -> None:
         s = self.cfg.stream
         self._streaming = True
-        self._ok(self._motion, cmd.servo_p(pose, s.period_s, s.aheadtime, s.gain))
+        self._dialect(self._motion, cmd.servo_p(pose, s.period_s, s.aheadtime, s.gain), cmd.servo_p_legacy(pose),
+                      kind="servop")
 
     def gripper(self, open: bool) -> None:
         if self._gripper_dev is None:

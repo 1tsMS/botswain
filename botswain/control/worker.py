@@ -335,6 +335,12 @@ class RobotWorker:
         if self._call("stream_target", self.driver.stream_target, verdict.cmd.pose):
             self._streaming = True
             self._last_stream_ns = now
+        else:
+            # Do not hammer the controller 33 times a second with a refused command: stop the stream and
+            # wait for the operator to release hold-to-move before trying again.
+            self._stream_latched = True
+            self._stop_stream()
+            self._log("error", "teleop stream stopped after a refused command; release hold to try again")
 
     def _stop_stream(self) -> None:
         self._end_stream()

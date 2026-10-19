@@ -277,6 +277,12 @@ class FakeDobotController:
                     return f"-30001,{{}},{text};"
                 if name == "movejog" and "coordtype=" in text:
                     return f"-30002,{{}},{text};"
+                if name == "movejog" and "CoordType=" in text:
+                    return f"-40002,{{}},{text};"
+                if name == "stop":
+                    return f"-10000,{{}},{text};"
+                if name == "servop" and kw:
+                    return f"-20000,{{}},{text};"
             elif name == "jointmovj":
                 return f"-10000,{{}},{text};"
             try:
@@ -315,7 +321,7 @@ class FakeDobotController:
                 if self.mode == 9:
                     self.mode = 5 if self._enabled_before_alarm else 4
                 return 0, ""
-            case "stop":
+            case "stop" | "resetrobot":
                 self._halt()
                 if self.mode in (7, 8):
                     self.mode = 5
@@ -344,7 +350,7 @@ class FakeDobotController:
         self.command_id += 1
         if name == "movejog":
             axis = pos[0]
-            coordtype = int(kw.get("coordtype", "0" if axis.startswith("J") else "1"))
+            coordtype = int(kw.get("coordtype", pos[1] if len(pos) > 1 else ("0" if axis.startswith("J") else "1")))
             is_joint = axis.startswith("J")
             if is_joint != (coordtype == 0):
                 return -6

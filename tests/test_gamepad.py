@@ -69,6 +69,7 @@ def test_release_stops_and_lead_is_capped(worker):
 
 def test_buttons(worker):
     t = GamepadTeleop(worker, lambda: PadState(False))
+    assert t.speed_scale == pytest.approx(0.1)
     actions = []
     t.on_action = actions.append
     t.step(pad("a"), 0.02)
@@ -78,7 +79,7 @@ def test_buttons(worker):
     for name in ("up", "up", "down"):
         t.step(pad(name), 0.02)
         t.step(pad(), 0.02)
-    assert t.speed_scale == pytest.approx(0.6)
+    assert t.speed_scale == pytest.approx(0.2)  # starts at 0.1 (10 %)
     for name in ("start", "back", "x"):
         t.step(pad(name), 0.02)
         t.step(pad(name), 0.02)  # held: only one action per press

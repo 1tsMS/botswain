@@ -60,7 +60,7 @@ def test_hold_jog_both_dialects(setup):
     assert wait_for(lambda: d.read_state().mode is Mode.JOGGING)
     d.jog_release()
     jogs = [c for c in ctrl.commands if c.startswith("MoveJog(X")]
-    assert jogs[-1] == ("MoveJog(X+,CoordType=1,User=0,Tool=0)" if legacy else "MoveJog(X+,coordtype=1)")
+    assert jogs[-1] == ("MoveJog(X+,1)" if legacy else "MoveJog(X+,coordtype=1)")
 
 
 def test_other_refusals_are_not_retried(setup):
@@ -80,3 +80,46 @@ def test_doctor_reports_the_syntax(setup):
     d.move_to(Joints((0, 0, 90, 0, -90, 0)), "joint")
     line = next(c for c in d.diagnose() if c.name == "Command syntax")
     assert ("older" in line.value) == legacy
+
+
+def test_stop_reaches_the_controller_in_both_dialects(setup):
+    ctrl, d, legacy = setup
+    p = d.read_state().tcp
+    d.set_speed(1)
+    d.move_to(p.with_axis("Z", p.z + 100), "linear")
+    assert wait_for(lambda: d.read_state().mode is Mode.MOVING)
+    d.stop()
+    assert wait_for(lambda: d.read_state().mode is Mode.IDLE, timeout=1.0)  # the queue really was cleared
+    assert ("ResetRobot()" in ctrl.commands) == legacy
+    before = len(ctrl.commands)
+    d.stop()  # the working stop form is remembered: no unknown-command round trip
+    assert ctrl.commands[before:] == ["MoveJog()", "ResetRobot()" if legacy else "Stop()"]
+
+
+def test_servo_p_falls_back_to_pose_only(setup):
+    ctrl, d, legacy = setup
+    p = d.read_state().tcp
+    d.stream_target(p.with_axis("Y", p.y + 50))  # long enough to see it moving at 100 % speed
+    sent = [c for c in ctrl.commands if c.startswith("ServoP(")]
+    assert ("t=" not in sent[-1]) == legacy
+    assert wait_for(lambda: d.read_state().mode is Mode.STREAMING, timeout=0.5)
+
+
+def test_stop_without_any_known_command_fails_loudly():
+    from botswain.drivers.dobot import fake_controller as fc
+
+    ctrl = FakeDobotController()
+    ctrl.legacy = True
+    ctrl.start()
+    original = ctrl._do
+    ctrl._do = lambda name, pos, kw: (-10000, "") if name == "resetrobot" else original(name, pos, kw)
+    try:
+        d = DobotDriver(dobot_cfg(ctrl))
+        d.connect()
+        with pytest.raises(DriverError) as e:
+            d.stop()
+        assert "e-stop" in e.value.hint
+        d.disconnect()
+    finally:
+        ctrl.stop()
+    assert fc  # module imported for the patch above

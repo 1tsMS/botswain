@@ -148,7 +148,24 @@ def mov_l_pose_legacy(p: Pose) -> str:
     return f"MovL({_six(p.as_list(), 'MovL pose')})"
 
 
-def move_jog_legacy(axis: str, coordtype: int) -> str:
+def move_jog_legacy(axis: str, coordtype: int) -> list[str]:
+    """Older forms to try in order (Dobot V3 API: positional coord_type, 1 user / 2 tool, default user 0).
+    Joint axes take no frame. A base-frame Cartesian jog may also go without one (V3 default: user 0 = base)."""
     if coordtype not in (0, 1, 2):
         raise ValueError(f"coordtype must be 0, 1 or 2, got {coordtype}")
-    return f"MoveJog({axis},CoordType={coordtype},User=0,Tool=0)"
+    if coordtype == 0:
+        return [f"MoveJog({axis})"]
+    forms = [f"MoveJog({axis},{coordtype})"]
+    if coordtype == 1:
+        forms.append(f"MoveJog({axis})")
+    return forms
+
+
+def servo_p_legacy(p: Pose) -> str:
+    """Dobot V3 ServoP: pose only (the controller plans its own timing). What Phone2Act sent on the lab CR5."""
+    return f"ServoP({_six(p.as_list(), 'ServoP')})"
+
+
+def reset_robot() -> str:
+    """Dobot V3 stop: stops motion and clears the queue (V4 calls it Stop())."""
+    return "ResetRobot()"

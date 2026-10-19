@@ -115,7 +115,7 @@ class GamepadTeleop:
         self.period = 1.0 / rate_hz
         self.max_lin_mm_s = 100.0
         self.max_rot_deg_s = 30.0
-        self.speed_scale = 0.5  # D-pad changes it, 0.1..1.0
+        self.speed_scale = 0.1  # starts at 10 %; D-pad changes it, 0.1..1.0
         self.remap = np.eye(3)
         self.on_action: Callable[[str], None] | None = None  # "start" / "back" / "x", called on the pad thread
         self.pad = PadState(False)

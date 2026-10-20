@@ -1,7 +1,7 @@
 # The real Dobot driver pointed at the fake controller on this laptop:
 #   .venv\Scripts\python -m botswain.drivers.dobot.fake_controller
 name: Dobot CR5 (fake controller)
-driver: dobot_v4
+driver: dobot_v3
 connection: {ip: 127.0.0.1, dashboard_port: 29999, motion_port: 29999, feedback_port: 30004, http_port: 22000}
 model: {urdf: ../assets/dobot_cr5/cr5_robot.urdf}
 limits:

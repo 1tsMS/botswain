@@ -40,6 +40,7 @@ class RecordingSession:
         self.recorder: Recorder | None = None
         self.root: Path | None = None
         self.episodes_saved = 0
+        self.dataset_source: str | None = None  # the input of the first saved episode that moved the arm
         self._key: tuple | None = None
 
     @property
@@ -76,13 +77,24 @@ class RecordingSession:
         self.recorder.cameras = cameras
         self.recorder.start_episode(task.strip())
 
+    def mismatch(self) -> str | None:
+        """Why the running episode does not belong in this dataset, or None. One dataset per input: training
+        normalises with the dataset's own stats, so a gamepad episode in a phone dataset mixes the conditions."""
+        source = self.recorder.main_source if self.recorder else None
+        if source is None or self.dataset_source is None or source == self.dataset_source:
+            return None
+        return f"this episode was driven by {source}, but this dataset holds {self.dataset_source} episodes"
+
     def save(self) -> int:
         """Ends the episode and writes it (encodes video: takes a few seconds). Returns the frame count."""
         if self.recorder is None:
             return 0
+        source = self.recorder.main_source
         n = self.recorder.save_episode()
         if n:
             self.episodes_saved += 1
+            if self.dataset_source is None:
+                self.dataset_source = source
         return n
 
     def discard(self) -> None:
@@ -94,3 +106,4 @@ class RecordingSession:
         if self.recorder is not None:
             self.recorder.close()
         self.recorder, self._key = None, None
+        self.dataset_source = None

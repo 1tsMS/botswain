@@ -11,7 +11,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer, Signal
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPushButton, QWidget
 
 from botswain.record.session import RecordingSession
 from botswain.sensors.cameras import CameraThread
@@ -99,8 +99,21 @@ class EpisodeBar(QWidget):
                           f"({len(cams)} camera(s), {FPS} fps)")
 
     def save(self) -> None:
-        if self.recording:
-            self._in_background("Saving episode (encoding video)...", self._do_save)
+        if not self.recording:
+            return
+        why = self.session.mismatch()
+        if why and not self.confirm_mismatch(why):
+            self.discard()
+            return
+        self._in_background("Saving episode (encoding video)...", self._do_save)
+
+    def confirm_mismatch(self, why: str) -> bool:
+        """Save anyway? (tests replace this)"""
+        answer = QMessageBox.warning(
+            self, "Different input", f"{why.capitalize()}.\n\nFor comparing inputs, record each input into its "
+            "own dataset. Save this episode anyway?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard, QMessageBox.StandardButton.Discard)
+        return answer == QMessageBox.StandardButton.Save
 
     def discard(self) -> None:
         if self.recording:
@@ -160,4 +173,6 @@ class EpisodeBar(QWidget):
         else:
             state = ("OPEN: press Close dataset to finish the files" if self.session.recorder is not None
                      else "closed, ready to check")
+            if self.session.dataset_source:
+                state = f"{self.session.dataset_source} dataset · {state}"
             self.status.setText(f"{self.session.episodes_saved} episode(s) saved · {state} · folder {self.dataset_root}")

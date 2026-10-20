@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 
 from PySide6.QtCore import Qt, Signal
@@ -17,6 +18,7 @@ ALL = -1
 
 class CamerasPage(QWidget):
     cameras_changed = Signal(list)
+    _scanned = Signal(list)  # from the scan thread
 
     def __init__(self, log: Callable[[str, str], None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -43,6 +45,7 @@ class CamerasPage(QWidget):
         panel.body_layout.addWidget(self.grid, 1)
         lay.addWidget(panel)
         self.show_btn.setEnabled(False)
+        self._scanned.connect(self._fill)
 
     def _button(self, text: str, role: str, slot) -> QPushButton:
         b = set_role(QPushButton(text), role)
@@ -51,9 +54,20 @@ class CamerasPage(QWidget):
         return b
 
     def scan(self, sources: list[CameraSource] | None = None) -> None:
-        """Lists every video source Windows knows: USB webcams, DroidCam, OBS Virtual Camera..."""
+        """Lists every video source Windows knows: USB webcams, DroidCam, OBS Virtual Camera...
+        The listing runs on a thread (a driver can take a while to answer), so the window never freezes."""
         self.stop_all()
-        found = list_sources() if sources is None else sources
+        if sources is not None:
+            self._fill(sources)
+            return
+        self.scan_btn.setEnabled(False)
+        self.choice.clear()
+        self.choice.addItem("scanning…", None)
+        self.show_btn.setEnabled(False)
+        threading.Thread(target=lambda: self._scanned.emit(list_sources()), name="camera-scan", daemon=True).start()
+
+    def _fill(self, found: list[CameraSource]) -> None:
+        self.scan_btn.setEnabled(True)
         self._names = {s.index: s.name for s in found}
         self.choice.clear()
         for s in found:
@@ -74,11 +88,8 @@ class CamerasPage(QWidget):
                    if self.choice.itemData(i) not in (None, ALL)] if choice == ALL else [choice]
         for i in indexes:
             cam = CameraThread(i, self._names.get(i, f"cam {i}"))
-            try:
-                cam.start()
-                self.cameras.append(cam)
-            except RuntimeError as e:
-                self._log("warn", str(e))
+            cam.start()  # opens on its own thread; a failure shows on the tile
+            self.cameras.append(cam)
         self._changed()
 
     def stop_all(self) -> None:

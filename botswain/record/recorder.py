@@ -31,6 +31,7 @@ from botswain.core.types import AXES_CART, RobotState
 log = logging.getLogger(__name__)
 
 SOURCE_CODES = {"": 0, "gui": 1, "phone": 2, "gamepad": 3, "vr": 4, "drag": 5}  # never renumber
+SOURCE_NAMES = {v: k or "none" for k, v in SOURCE_CODES.items()}
 SOURCE_LEGEND = "source (" + ", ".join(f"{v} {k or 'none'}" for k, v in SOURCE_CODES.items()) + ")"
 
 
@@ -77,6 +78,7 @@ class Recorder:
         self.writer = writer
         self._clock = clock
         self.frames = 0
+        self.source_frames: dict[str, int] = {}  # input name -> frames in this episode
         self.task = ""
         self.error: str | None = None
         self._pending: tuple[dict, np.ndarray] | None = None  # (frame not written yet, its measured TCP pose)
@@ -92,6 +94,7 @@ class Recorder:
             raise RuntimeError("an episode is already being recorded")
         self.task = task
         self.frames = 0
+        self.source_frames = {}
         self.error = None
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, name="recorder", daemon=True)
@@ -167,6 +170,14 @@ class Recorder:
                 frame[key][:6] = next_tcp
         self.writer.add(frame)
         self.frames += 1
+        name = SOURCE_NAMES.get(int(frame["observation.input_source"][0]), "none")
+        self.source_frames[name] = self.source_frames.get(name, 0) + 1
+
+    @property
+    def main_source(self) -> str | None:
+        """The input that drove this episode most, or None if nothing drove the arm."""
+        driven = {k: v for k, v in self.source_frames.items() if k != "none"}
+        return max(driven, key=driven.get) if driven else None
 
     def sample(self) -> dict:
         """One frame as it is now (drag frames still carry the placeholder action)."""

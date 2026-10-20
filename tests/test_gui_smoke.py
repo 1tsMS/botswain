@@ -140,6 +140,7 @@ def test_app_drives_fake_dobot_controller(qtbot, make_window):
     from botswain.drivers.dobot.fake_controller import FakeDobotController
 
     ctrl = FakeDobotController()
+    ctrl.v3 = True  # like the lab CR5 (dobot_cr5_fake.yaml speaks dobot_v3)
     ctrl.start()
     try:
         worker, w = make_window(dobot_cfg(ctrl))
@@ -157,7 +158,7 @@ def test_app_drives_fake_dobot_controller(qtbot, make_window):
         qtbot.waitUntil(lambda: dialog.table.rowCount() >= 9, timeout=5000)
         assert "Disconnect" == w.toolbar.connect_btn.text()
         w.close()
-        assert ctrl.commands[-2:] == ["MoveJog()", "Stop()"]
+        assert ctrl.commands[-2:] == ["MoveJog()", "ResetRobot()"]
     finally:
         ctrl.stop()
 
@@ -203,6 +204,7 @@ def test_scan_button_lists_every_source(qtbot, make_window, monkeypatch):
     monkeypatch.setattr(cameras_page, "list_sources", lambda: found)
     _, w = make_window()
     page = w.cameras_page
-    page.scan_btn.click()
-    items = [page.choice.itemText(i) for i in range(page.choice.count())]
-    assert items == [s.name for s in found] + ["All sources"] and page.show_btn.isEnabled()
+    page.scan_btn.click()  # lists on a thread: the window stays responsive
+    items = lambda: [page.choice.itemText(i) for i in range(page.choice.count())]
+    qtbot.waitUntil(lambda: items() == [s.name for s in found] + ["All sources"], timeout=2000)
+    assert page.show_btn.isEnabled() and page.scan_btn.isEnabled()

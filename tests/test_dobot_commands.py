@@ -59,6 +59,6 @@ def test_negative_zero_is_never_sent():
     # Lab CR5: JointMovJ(-0.000000,...) -> -30001. Saved point P1 had J1 = -0.0.
     from botswain.drivers.dobot import commands as c
 
-    text = c.joint_mov_j_legacy([-0.0, -1e-9, 91.69, -6.8e-06, -90.6, 0.82])
+    text = c.joint_mov_j_v3([-0.0, -1e-9, 91.69, -6.8e-06, -90.6, 0.82])
     assert text == "JointMovJ(0.000000,0.000000,91.690000,-0.000007,-90.600000,0.820000)"
-    assert "-0.000000" not in c.servo_p_legacy(Pose(-0.0, -0.0000004, 0, 0, 0, -0.0))
+    assert "-0.000000" not in c.servo_p_v3(Pose(-0.0, -0.0000004, 0, 0, 0, -0.0))

@@ -1,6 +1,6 @@
-# Lab Dobot CR5, V4 controller. First-run limits are small on purpose; widen step by step after testing.
+# Lab Dobot CR5, controller 3.5.x (V3 command set). First-run limits are small on purpose; widen step by step.
 name: Dobot CR5
-driver: dobot_v4
+driver: dobot_v3  # controller 3.5.x (V3 command set)
 connection: {ip: 192.168.5.1, dashboard_port: 29999, motion_port: 29999, feedback_port: 30004, http_port: 22000}
 model: {urdf: ../assets/dobot_cr5/cr5_robot.urdf}
 limits:

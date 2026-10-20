@@ -45,7 +45,9 @@ class TopToolbar(QToolBar):
         self._group("Connection", [self.connect_btn, self.doctor_btn])
 
         self.enable_btn = self._tool("Enable", "locked", lambda: self.enable_toggled.emit(not self._enabled))
-        self.clear_btn = self._tool("Clear error", "clear", self.clear_clicked.emit)
+        self.clear_btn = self._tool("Recover", "clear", self.clear_clicked.emit)
+        self.clear_btn.setToolTip("Stuck or in alarm: reconnect if the controller went silent, stop, clear the "
+                                  "error. It never enables: press Enable when the cell is clear.")
         self.home_btn = self._tool("Home", "home", self.home_clicked.emit)
         robot_tools = [self.enable_btn, self.clear_btn, self.home_btn]
         self.drag_btn = self._tool("Drag mode", "drag", self.drag_clicked.emit)
@@ -137,7 +139,7 @@ class TopToolbar(QToolBar):
         set_flag(self.enable_btn, "on", self._enabled)
         live = connected and state.link_ok
         self.enable_btn.setEnabled(live and state.mode not in (Mode.ERROR, Mode.COLLISION) or self._enabled)
-        self.clear_btn.setEnabled(live)
+        self.clear_btn.setEnabled(connected)  # exactly when the link is bad, Recover must still work
         self.save_point_btn.setEnabled(live)
         home_ok = self.cfg.home_confirmed and self.cfg.home_joints_deg is not None
         self.home_btn.setEnabled(home_ok and live and state.mode is Mode.IDLE)
@@ -155,12 +157,8 @@ def state_text(state: RobotState, connected: bool) -> str:
     """'Enabled · idle', 'Disabled', 'Error · 2 alarms', ... with a coloured dot."""
     if not connected or state.mode is Mode.DISCONNECTED:
         dot, text = C["chrome_off"], "Disconnected"
-    elif not state.link_ok:
-        dot, text = C["red"], "No feedback"
-    elif state.mode in (Mode.ERROR, Mode.COLLISION):
-        n = len(state.errors)
-        count = f" · {n} alarm{'s' if n != 1 else ''}" if n else ""
-        dot, text = C["red"], f"{state.mode.value.capitalize()}{count}"
+    elif not state.link_ok or state.mode in (Mode.ERROR, Mode.COLLISION):
+        dot, text = C["red"], (state.fault or "No feedback").capitalize()
     elif state.mode in ENABLED_MODES:
         dot, text = C["ok"], f"Enabled · {state.mode.value}"
     else:

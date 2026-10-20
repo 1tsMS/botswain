@@ -82,7 +82,7 @@ Rules that never change:
 - **Straight-line move** (X..Rz jogs, Move to target, teleop): every 8 ms it takes a small step along the
   line, then solves which joint angles put the tool there (inverse kinematics).
 - It behaves like the Dobot: starts disabled; Enable makes it idle; moving shows "moving"; an alarm puts it
-  in error until Clear error.
+  in error until Recover (or Clear error).
 
 That makes it possible to test the GUI, the safety gate, teleop and recording at home.
 

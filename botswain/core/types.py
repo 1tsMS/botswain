@@ -123,6 +123,7 @@ class RobotState:
     gripper: float | None = None  # last command: 0 = closed, 1 = open, None = nothing sent / no gripper
     gripper_pos: float | None = None  # measured opening 0..1 when the gripper reports it, else None
     gripper_status: str = ""  # the gripper's own word: "moving", "object caught"..., "" if it reports nothing
+    fault: str = ""  # what is wrong, in words ("controller not answering", "alarm: collision"), "" if nothing
     raw_mode: int = -1  # the brand's own mode code, shown in the GUI for debugging
     link_ok: bool = False
     feedback_hz: float = 0.0
@@ -149,6 +150,7 @@ class Capabilities:
     frames: tuple[str, ...]
     max_tcp_speed_mm_s: float
     gripper_force: bool = False  # the gripper takes a closing-force setting (SetGripperForce)
+    request_control: bool = False  # the controller can be switched to remote control from here (Take control)
 
 
 # ---- commands: the only things the GUI and inputs can put in the worker queue ----
@@ -255,6 +257,11 @@ class Gripper:
 
 
 @dataclass(frozen=True)
+class Recover:
+    """Stuck robot (alarm, controller silent): reconnect, stop, clear the error. Never enables."""
+
+
+@dataclass(frozen=True)
 class Drag:
     """Hand-guiding (drag teach): on = the arm goes compliant and follows the operator's hand, off = it holds."""
 
@@ -282,6 +289,6 @@ class Diagnose:
 
 Command = (
     Connect | Disconnect | Enable | Disable | ClearError | Stop | SetSpeed
-    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | SetGripperForce | Drag | Diagnose
+    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | SetGripperForce | Drag | Recover | Diagnose
     | RequestControl
 )

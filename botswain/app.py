@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication, QObject, Qt, Signal
+from PySide6.QtQuick import QQuickWindow, QSGRendererInterface
 from PySide6.QtWidgets import QApplication
 
 from botswain.control.safety import SafetyGate
@@ -39,7 +40,10 @@ def build(cfg: RobotConfig, view_3d: bool = True) -> tuple[RobotWorker, MainWind
 
 def run(cfg: RobotConfig) -> int:
     log_file = setup_logging(LOG_DIR)
-    # The Blocks page loads Qt's web engine later; it needs shared OpenGL contexts set before the app exists.
+    # The Blocks page (Qt web engine, drawn through Qt Quick) and the 3D robot view (VTK in a QOpenGLWidget) share
+    # one window. Qt Quick defaults to Direct3D on Windows while the window composites with OpenGL because of
+    # the 3D view, and the web view then showed black. Both on OpenGL, with shared contexts, set before the app.
+    QQuickWindow.setGraphicsApi(QSGRendererInterface.GraphicsApi.OpenGL)
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts)
     app = QApplication(sys.argv)
     app.setApplicationName("Botswain")

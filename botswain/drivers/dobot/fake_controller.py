@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import socket
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -76,7 +77,8 @@ class FakeDobotController:
         self.tcp_mode = True
         self.feedback_paused = False
         self.pose_offset_mm = 0.0  # GetPose() differs from feedback by this much (Doctor test)
-        self.legacy = False  # behave like the lab CR5's older firmware (positional syntax only)
+        self.silent = False  # the dashboard swallows commands without answering until a new connection
+        self.v3 = False  # behave like a V3 controller (3.5.x, the lab CR5): positional syntax, V3 mode codes
         self.commands: list[str] = []
         self.gripper_frames: list[list[int]] = []
         self.gripper_regs: dict[int, int] = {0x0200: 0, 0x0201: 1, 0x0202: 1000}  # DH registers, not initialised
@@ -138,7 +140,7 @@ class FakeDobotController:
 
     def inject_alarm(self, code: int) -> None:
         with self._lock:
-            self._enabled_before_alarm = self.mode in (5, 7, 8)
+            self._enabled_before_alarm = self.mode in (5, 7, self.jog_mode)
             self.alarms.append(code)
             self.mode = 9
             self._halt()
@@ -175,6 +177,7 @@ class FakeDobotController:
     def _serve_dashboard(self, conn: socket.socket) -> None:
         buf = b""
         conn.settimeout(0.2)
+        self.silent = False  # like the lab CR5: a hung dashboard answers again on a fresh connection
         while not self._stop.is_set():
             try:
                 data = conn.recv(4096)
@@ -189,6 +192,9 @@ class FakeDobotController:
                 line, buf = buf.split(b"\n", 1)
                 text = line.decode("ascii", "replace").strip()
                 if text:
+                    if self.silent:  # stopped answering (seen on the lab CR5 after pressing into the table)
+                        self.commands.append(text)
+                        continue
                     try:
                         conn.sendall(self.handle(text).encode("ascii"))
                     except OSError:
@@ -260,7 +266,7 @@ class FakeDobotController:
         return build_packet(
             mode=self.mode, timestamp_ms=int(time.time() * 1000), q_actual=tuple(self.joints),
             q_target=tuple(self.joints_target), tcp_actual=tuple(self.tcp), tcp_target=tuple(tcp_target),
-            speed_scaling=float(self.speed), enable=int(self.mode in (5, 6, 7, 8, 10)), error=int(self.mode == 9),
+            speed_scaling=float(self.speed), enable=int(self.mode in (5, 6, 7, 8, 10, 11)), error=int(self.mode == 9),
             collision=int(self.mode == 11), command_id=self.command_id)
 
     def _integrate(self, dt: float) -> None:
@@ -285,6 +291,11 @@ class FakeDobotController:
         self.jog = None
         self.tcp_target, self.joints_target = self.tcp.copy(), self.joints.copy()
 
+    @property
+    def jog_mode(self) -> int:
+        """RobotMode while jogging: 11 on V3, 8 on V4 (V4's 11 is collision; mixing the two broke hold-jog)."""
+        return 11 if self.v3 else 8
+
     def handle(self, text: str) -> str:
         """One dashboard command -> one reply string."""
         with self._lock:
@@ -295,19 +306,19 @@ class FakeDobotController:
                     return f"0,{{}},{text};"
                 return "Not Tcp"
             name, pos, kw = parse_command(text)
-            if self.legacy:
+            if self.v3:
+                if name in ("stop", "requestcontrol"):
+                    return f"-10000,{{}},{text};"
                 if pos and pos[0].strip() == "-0.000000":  # the lab CR5 reads "-0" as a bad first parameter
                     return f"-30001,{{}},{text};"
                 if name in ("movj", "movl") and ("joint" in kw or "pose" in kw):
                     return f"-30001,{{}},{text};"
                 if name == "movejog" and "coordtype=" in text:
                     return f"-30002,{{}},{text};"
-                if name == "movejog" and "CoordType=" in text:
-                    return f"-40002,{{}},{text};"
+                if name == "movejog" and "CoordType=1" in text and not pos[0].startswith("J"):
+                    return f"-40002,{{}},{text};"  # V3 CoordType 1 = joint frame: a Cartesian axis is out of range
                 if name == "movejog" and len(pos) > 1:  # positional frame: the lab CR5's split refusal
                     return f"-40001,0,{{}},;{text};"
-                if name == "stop":
-                    return f"-10000,{{}},{text};"
                 if name == "servop" and kw:
                     return f"-20000,{{}},{text};"
             elif name == "jointmovj":
@@ -323,12 +334,12 @@ class FakeDobotController:
             if name == "movejog" and not pos:
                 if self.jog is not None:
                     self._halt()
-                    if self.mode == 8:
+                    if self.mode == self.jog_mode:
                         self.mode = 5
                 return 0, ""
             if self.mode == 9:
                 return -2, ""
-            if self.mode not in (5, 7, 8):
+            if self.mode not in (5, 7, self.jog_mode):
                 return -1, ""
             return self._motion(name, pos, kw), ""
         match name:
@@ -360,7 +371,7 @@ class FakeDobotController:
                 return 0, ""
             case "stop" | "resetrobot":
                 self._halt()
-                if self.mode in (7, 8):
+                if self.mode in (7, self.jog_mode):
                     self.mode = 5
                 return 0, ""
             case "robotmode":
@@ -387,13 +398,18 @@ class FakeDobotController:
         self.command_id += 1
         if name == "movejog":
             axis = pos[0]
-            coordtype = int(kw.get("coordtype", pos[1] if len(pos) > 1 else ("0" if axis.startswith("J") else "1")))
             is_joint = axis.startswith("J")
-            if is_joint != (coordtype == 0):
-                return -6
+            if self.v3:  # V3 CoordType: 0 user, 1 joint, 2 tool; a bare axis jogs joints or the user frame
+                frame = kw.get("coordtype", "1" if is_joint else "0")
+                if is_joint != (frame == "1"):
+                    return -6
+            else:  # V4 coordtype: 0 joint, 1 user, 2 tool
+                coordtype = int(kw.get("coordtype", pos[1] if len(pos) > 1 else ("0" if is_joint else "1")))
+                if is_joint != (coordtype == 0):
+                    return -6
             index = int(axis[1]) - 1 if is_joint else CART[axis[:-1].lower()]
             self.jog = (is_joint, index, 1 if axis.endswith("+") else -1)
-            self.mode = 8
+            self.mode = self.jog_mode
             return 0
         if name == "jointmovj":
             self.joints_target = np.array([float(v) for v in pos[:6]])
@@ -454,8 +470,9 @@ class FakeDobotController:
 def main() -> None:
     logging.basicConfig(level=logging.INFO)
     ctrl = FakeDobotController(dashboard_port=29999, feedback_port=30004, http_port=22000, motion_port=30003)
+    ctrl.v3 = "--v4" not in sys.argv  # V3 like the lab CR5, unless asked for V4
     ctrl.start()
-    print(f"Fake Dobot controller on 127.0.0.1 {ctrl.ports}")
+    print(f"Fake Dobot controller ({'V3' if ctrl.v3 else 'V4'}) on 127.0.0.1 {ctrl.ports}")
     print("keys + Enter: p pause feedback, a alarm 22, s split packets, g garbage, t TCP mode, q quit")
     try:
         while True:

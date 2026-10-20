@@ -1,4 +1,4 @@
-"""Exact Dobot V4 command strings (protocol doc V4.6.6). Pure functions, no sockets.
+"""Exact Dobot command strings, V4 (protocol doc V4.6.6) and V3 below. Pure functions, no sockets.
 
 Numbers use 6 decimals like the official SDK. Ranges are checked here so a bad value never reaches the arm.
 Moves leave out v= on purpose: they then run at the global SpeedFactor, which the speed control and the
@@ -141,49 +141,28 @@ def set_tool_485(baud: int, parity: str = "N", stop: int = 1) -> str:
     return f'SetTool485({int(baud)},"{parity}",{int(stop)})'
 
 
-# ---- older controller firmware ----
-# Some V4 controllers (seen on the lab CR5, 2026-10-19) refuse the keyword forms above with -30001/-30002
-# (named parameter not understood) but accept the older positional forms below. The driver tries the
-# keyword form first and falls back to these only on that syntax refusal, so nothing moves twice.
+# ---- V3 command set (controller 3.5.x, e.g. the lab CR5) ----
+# Positional forms; keyword forms like MovJ(joint={...}) are refused there. See dialects.py.
 
 
-def joint_mov_j_legacy(j: Joints | Sequence[float]) -> str:
+def joint_mov_j_v3(j: Joints | Sequence[float]) -> str:
     values = j.values if isinstance(j, Joints) else j
     return f"JointMovJ({_six(values, 'JointMovJ')})"
 
 
-def mov_j_pose_legacy(p: Pose) -> str:
+def mov_j_pose_v3(p: Pose) -> str:
     return f"MovJ({_six(p.as_list(), 'MovJ pose')})"
 
 
-def mov_l_pose_legacy(p: Pose) -> str:
+def mov_l_pose_v3(p: Pose) -> str:
     return f"MovL({_six(p.as_list(), 'MovL pose')})"
 
 
-def move_jog_legacy(axis: str, coordtype: int) -> list[str]:
-    """Older MoveJog forms to try in order after the V4.6 one. Each refusal moves nothing.
-
-    Dobot's V3 documents disagree on the frame number: the V3 Python SDK says 1 user / 2 tool, the CR protocol
-    page says 0 user / 1 joint / 2 tool. The lab CR5 refused CoordType=1 (-40002) and the positional
-    `MoveJog(X+,1)` (-40001, split reply), so both numberings are tried. Joint axes take no frame. A base jog
-    may also go bare: both documents default to user frame 0 (= base) or to a joint frame that refuses X+;
-    neither defaults to the tool frame, so a bare form can never jog in the wrong frame.
-    """
-    if coordtype not in (0, 1, 2):
-        raise ValueError(f"coordtype must be 0, 1 or 2, got {coordtype}")
-    if coordtype == 0:
-        return [f"MoveJog({axis})"]
-    if coordtype == 2:
-        return [f"MoveJog({axis},CoordType=2,User=0,Tool=0)", f"MoveJog({axis},2)"]
-    return [f"MoveJog({axis},CoordType=1,User=0,Tool=0)", f"MoveJog({axis},CoordType=0,User=0,Tool=0)",
-            f"MoveJog({axis})", f"MoveJog({axis},1)"]
-
-
-def servo_p_legacy(p: Pose) -> str:
-    """Dobot V3 ServoP: pose only (the controller plans its own timing). What Phone2Act sent on the lab CR5."""
+def servo_p_v3(p: Pose) -> str:
+    """V3 ServoP: pose only (the controller plans its own timing). What Phone2Act sent on the lab CR5."""
     return f"ServoP({_six(p.as_list(), 'ServoP')})"
 
 
 def reset_robot() -> str:
-    """Dobot V3 stop: stops motion and clears the queue (V4 calls it Stop())."""
+    """V3 stop: stops motion and clears the queue (V4 calls it Stop())."""
     return "ResetRobot()"

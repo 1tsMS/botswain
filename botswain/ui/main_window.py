@@ -24,6 +24,7 @@ from botswain.core.types import (
     Joints,
     Mode,
     MoveTo,
+    Recover,
     RequestControl,
     RobotState,
 )
@@ -40,6 +41,7 @@ from botswain.ui.pages.teleop_page import TeleopPage
 from botswain.ui.pages.vr_page import VrPage
 from botswain.ui.rail import PAGES, Rail
 from botswain.ui.status_bar import StatusBar
+from botswain.ui.theme import set_flag
 from botswain.ui.toolbar import TopToolbar
 from botswain.ui.widgets.camera_tile import CameraGrid
 
@@ -157,9 +159,10 @@ class MainWindow(QMainWindow):
         file_menu.addAction("Quit", self.close)
         robot = bar.addMenu("Robot")
         robot.addAction("Connect / Disconnect", self._toggle_connect)
-        robot.addAction("Clear error", lambda: self.worker.submit(ClearError()))
-        robot.addAction("Take control (RequestControl, Dobot firmware 4.6+)",
-                        lambda: self.worker.submit(RequestControl()))
+        robot.addAction("Recover (reconnect, stop, clear error)", lambda: self.worker.submit(Recover()))
+        robot.addAction("Clear error only", lambda: self.worker.submit(ClearError()))
+        if self.worker.driver.capabilities.request_control:  # controllers that can switch themselves to remote control (Dobot V4 >= 4.6)
+            robot.addAction("Take control (RequestControl)", lambda: self.worker.submit(RequestControl()))
         stop = QAction("STOP", self)
         stop.setShortcutVisibleInContextMenu(True)
         stop.triggered.connect(self.stop_all)
@@ -185,7 +188,7 @@ class MainWindow(QMainWindow):
         tb.enable_toggled.connect(lambda on: self.worker.submit(Enable() if on else Disable()))
         tb.drag_clicked.connect(
             lambda: self.worker.submit(Drag(self.worker.latest_state().mode is not Mode.DRAG)))
-        tb.clear_clicked.connect(lambda: self.worker.submit(ClearError()))
+        tb.clear_clicked.connect(lambda: self.worker.submit(Recover()))
         tb.stop_button.pressed.connect(self.stop_all)  # on press, not release
         tb.home_clicked.connect(self._home)
         tb.save_point_clicked.connect(self._save_point)
@@ -281,6 +284,7 @@ class MainWindow(QMainWindow):
         can_record = bar.session is not None and self._connected and state.link_ok
         self.toolbar.record_btn.setEnabled(can_record or bar.recording)
         self.toolbar.record_btn.setText("Save ep." if bar.recording else "Record")
+        set_flag(self.toolbar.record_btn, "rec", bar.recording)  # red while recording
         self.toolbar.record_btn.setToolTip("" if bar.session else "Recording needs LeRobot: pip install -e .[record]")
         self.status.set_dataset(str(bar.dataset_root) if bar.session and bar.session.recorder else None)
 

@@ -35,6 +35,7 @@ from botswain.core.types import (
     Mode,
     MoveTo,
     Pose,
+    Recover,
     RequestControl,
     RobotState,
     SetGripperForce,
@@ -267,6 +268,12 @@ class RobotWorker:
                 self._call("disable", d.disable)
             case ClearError():
                 self._call("clear_error", d.clear_error)
+            case Recover():
+                self._hold_tick_ns = None
+                self._end_stream()
+                steps: list[str] = []
+                if self._call("recover", lambda: steps.extend(d.recover())):
+                    self._log("info", "recover: " + "; ".join(steps) + ". Press Enable when the cell is clear.")
             case SetSpeed(pct=pct):
                 self._call("set_speed", d.set_speed, pct)
             case JogStep(axis=axis, delta=delta, frame=frame):

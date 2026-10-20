@@ -70,7 +70,7 @@ def offline_checks(cfg: RobotConfig, sample_s: float = 1.0) -> list[Check]:
     from botswain.drivers.dobot.dashboard import HINT_TCP, NOT_TCP, DashboardClient
     from botswain.drivers.dobot.feedback import FrameReader
 
-    if cfg.connection is None or cfg.driver != "dobot_v4":
+    if cfg.connection is None or not cfg.driver.startswith("dobot_"):
         return []
     c = cfg.connection
     checks = []

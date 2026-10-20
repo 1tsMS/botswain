@@ -8,7 +8,7 @@ robots: one driver file per brand.
 
 | Works | Where it is tested |
 |---|---|
-| Connect, health check (Doctor), enable / disable, clear error, STOP | fake robot, fake Dobot controller |
+| Connect, health check (Doctor), enable / disable, Recover, STOP | fake robot, fake Dobot controller |
 | Jog: steps or hold, base / tool frame, joints | fake robot, fake Dobot controller |
 | Live pose, joints and 3D model (CR5 URDF) | fake robot |
 | Safety gate: speed cap, workspace box, joint limits, hold-jog watchdog | unit tests |
@@ -68,10 +68,17 @@ Without `--robot` the app opens the robot you used last.
 1. **Connect** opens the links and reads the state. It never enables the robot.
 2. **Doctor** runs health checks without moving anything: ping, ports, feedback rate, TCP mode, robot mode,
    alarms, pose agreement, 3D model. Every failed check comes with a fix.
-3. **Enable** powers the motors. **Disable** turns them off. **Clear error** clears an alarm.
+3. **Enable** powers the motors. **Disable** turns them off.
+4. **Recover** gets a stuck robot back: it reconnects if the controller stopped answering (seen after the arm
+   pressed into the table), stops drag, jog and the motion queue, clears the alarm and shows what is left.
+   It never enables: press Enable when the cell is clear. It works even while the feedback is down.
 
-On a Dobot that answers "Not Tcp": switch it to TCP/IP mode in DobotStudio Pro, or use
-**Robot > Take control** on firmware 4.6 and newer.
+The status (top right) says what is wrong in words: "alarm: collision", "controller not answering",
+"feedback lost". Dobot controllers come in two command sets, picked in the robot config: `dobot_v3`
+(controller 3.5.x, CR series, the lab CR5) and `dobot_v4` (4.x: CRA, Nova, E6). The Doctor shows which.
+
+On a Dobot that answers "Not Tcp": switch it to TCP/IP mode in DobotStudio Pro, then close DobotStudio.
+V4 controllers (4.6 and newer) can also use **Robot > Take control**; V3 has no such command.
 
 ### 3. STOP
 **Space** or **Esc** from anywhere in the app, or the red STOP button. STOP clears every queued command,
@@ -274,7 +281,9 @@ Then run the app with `robots/dobot_cr5_fake.yaml`. In its window, type a key an
 
 | Problem | Fix |
 |---|---|
-| Connect fails: "Not Tcp" | TCP/IP mode in DobotStudio Pro (then close DobotStudio), or Robot > Take control (fw 4.6+) |
+| Connect fails: "Not Tcp" | TCP/IP mode in DobotStudio Pro (then close DobotStudio), or Robot > Take control (V4 4.6+) |
+| Stuck after hitting something, "controller not answering" | **Recover**; if it still does not answer, power-cycle the controller |
+| Hold-jog stops after a split second | the robot config's protocol does not match the controller (`dobot_v3` for 3.5.x) |
 | Doctor: ports closed | cable, controller power, laptop on a static IP in 192.168.5.x |
 | Jog keys grey | hover them: not connected, not enabled, in error, or busy |
 | Phone page: 403 | open the full address with `?k=...` from the Teleop page (the key changes each start) |

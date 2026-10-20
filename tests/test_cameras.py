@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 from helpers import wait_for
 
 from botswain.sensors.cameras import CameraThread, list_cameras
@@ -43,6 +42,10 @@ def test_zero_cameras_found():
     assert list_cameras(max_index=3, opener=lambda i: FakeCapture(opened=i == 1)) == [1]
 
 
-def test_camera_that_does_not_open_raises():
-    with pytest.raises(RuntimeError):
-        CameraThread(5, "x", opener=lambda i: FakeCapture(opened=False)).start()
+def test_camera_that_does_not_open_reports_instead_of_freezing():
+    # Opening runs on the camera's thread (DirectShow can take seconds): start() returns at once.
+    cam = CameraThread(5, "x", opener=lambda i: FakeCapture(opened=False))
+    cam.start()
+    assert wait_for(lambda: cam.error is not None) and "did not open" in cam.error
+    assert cam.latest() is None
+    cam.stop()

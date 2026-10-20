@@ -95,6 +95,7 @@ class DashboardClient:
         self.port = port
         self.timeout_s = timeout_s
         self.last_rtt_ms: float | None = None
+        self.silent = False  # the controller stopped answering (a reply timed out); cleared by the next reply
         self._sock: socket.socket | None = None
         self._buf = b""
         self._lock = threading.Lock()
@@ -117,6 +118,14 @@ class DashboardClient:
         with self._lock:
             self._drop()
 
+    def reconnect(self) -> None:
+        """Drop the socket and open a new one. A Dobot dashboard that stopped answering often answers again on
+        a fresh connection (it allows one client, so the old one must go first)."""
+        with self._lock:
+            self._drop()
+        self.connect()
+        self.silent = False
+
     def call(self, cmd: str, timeout_s: float | None = None) -> Reply:
         """Send one command and return its reply (any ErrorID). Raises DriverError on link problems only."""
         name = command_name(cmd)
@@ -136,10 +145,12 @@ class DashboardClient:
                     reply = self._to_reply(text, name)
                     if reply is not None:
                         self.last_rtt_ms = (time.perf_counter() - t0) * 1000.0
+                        self.silent = False
                         return reply
                     continue
                 remaining = deadline - time.perf_counter()
                 if remaining <= 0:
+                    self.silent = True
                     raise DriverError(TIMEOUT, f"no reply to {name} within {timeout_s or self.timeout_s:.1f} s",
                                       "controller busy, or the link is down")
                 self._recv(remaining)

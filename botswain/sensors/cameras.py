@@ -68,27 +68,38 @@ class CameraThread:
         self._cap = None
         self.fps = 0.0
         self.failures = 0
+        self.error: str | None = None  # set by the camera's thread if the device does not open
 
     def start(self) -> None:
-        self._cap = self._opener(self.index)
-        if not self._cap.isOpened():
-            raise RuntimeError(f"camera {self.index} did not open")
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        """Returns at once: opening a DirectShow device (DroidCam, OBS) can take seconds, so the camera's own
+        thread does it. Until the first frame, latest() is None; if it fails, error says why."""
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         if self._thread.is_alive():
             self._thread.join(1.0)
-        if self._cap is not None:
-            self._cap.release()
 
     def latest(self) -> tuple[np.ndarray, int] | None:
         """(BGR frame, arrival ns) of the newest frame, or None before the first one."""
         return self._latest
 
     def _run(self) -> None:
+        cap = self._opener(self.index)
+        if not cap.isOpened():
+            self.error = f"{self.name} did not open (in use by another app?)"
+            log.warning("camera %s (%d) did not open", self.name, self.index)
+            cap.release()
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        self._cap = cap
+        try:
+            self._read_loop()
+        finally:
+            cap.release()
+
+    def _read_loop(self) -> None:
         count, window = 0, now_ns()
         while not self._stop.is_set():
             ok, frame = self._cap.read()

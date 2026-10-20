@@ -18,10 +18,13 @@ class CameraTile(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setMinimumSize(160, 120)
         self.setStyleSheet("background: #1f2023; color: #8d9097; border-radius: 4px;")
-        self.setText(f"{cam.name} · waiting")
+        self.setText(f"{cam.name} · opening…")
         self._last_t = 0
 
     def refresh(self) -> None:
+        if self.cam.error and not self._last_t:
+            self.setText(self.cam.error)
+            return
         latest = self.cam.latest()
         if latest is None or latest[1] == self._last_t:
             return

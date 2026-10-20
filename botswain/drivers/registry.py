@@ -9,7 +9,8 @@ from botswain.drivers.base import Driver
 
 DRIVERS = {
     "fake": ("botswain.drivers.fake", "FakeDriver"),
-    "dobot_v4": ("botswain.drivers.dobot.driver", "DobotDriver"),
+    "dobot_v3": ("botswain.drivers.dobot.driver", "DobotV3Driver"),  # controller 3.5.x (CR series)
+    "dobot_v4": ("botswain.drivers.dobot.driver", "DobotV4Driver"),  # controller 4.x (CRA, Nova, E6)
 }
 
 

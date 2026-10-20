@@ -115,3 +115,35 @@ def test_refuses_to_record_without_a_robot(tmp_path):
             RecordingSession(w, FakeWriter).start(tmp_path / "ds", "x/ds", "pick", 30, {})
     finally:
         w.shutdown()
+
+
+def _drive(worker, source, seconds=0.4):
+    from botswain.core.types import StreamTarget
+
+    end = time.perf_counter() + seconds
+    while time.perf_counter() < end:
+        p = worker.latest_state().tcp
+        worker.stream(StreamTarget(p.with_axis("X", p.x + 1.0), now_ns(), source, True))
+        time.sleep(0.02)
+    p = worker.latest_state().tcp
+    worker.stream(StreamTarget(p, now_ns(), source, False))
+    assert wait_for(lambda: worker.latest_state().mode is Mode.IDLE)
+
+
+def test_dataset_guard_flags_a_different_input(worker, tmp_path):
+    # One dataset per input (training normalises with the dataset's own stats): a gamepad episode in a phone
+    # dataset must be caught before it is saved.
+    session = RecordingSession(worker, lambda *a: FakeWriter(*a))
+    session.start(tmp_path / "d", "botswain/d", "pick", 30, {})
+    _drive(worker, "phone")
+    assert session.mismatch() is None  # first episode sets the dataset's input
+    session.save()
+    assert session.dataset_source == "phone"
+    session.start(tmp_path / "d", "botswain/d", "pick", 30, {})
+    _drive(worker, "gamepad")
+    assert session.mismatch() == "this episode was driven by gamepad, but this dataset holds phone episodes"
+    session.discard()
+    session.start(tmp_path / "d", "botswain/d", "pick", 30, {})
+    time.sleep(0.2)  # idle episode: no input, no complaint
+    assert session.mismatch() is None
+    session.save()

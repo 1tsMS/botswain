@@ -55,6 +55,13 @@ class Driver(ABC):
     @abstractmethod
     def clear_error(self) -> None: ...
 
+    def recover(self) -> list[str]:
+        """Get a stuck robot back to a known state without enabling it. Default: stop, then clear the error.
+        Returns one line per step for the log."""
+        self.stop()
+        self.clear_error()
+        return ["stopped", "error cleared"]
+
     @abstractmethod
     def stop(self) -> None:
         """Stop all motion. Works in any mode, never raises just because nothing was moving."""

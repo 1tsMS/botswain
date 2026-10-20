@@ -48,6 +48,7 @@ QToolButton[role="tool"]:hover { background: %(chrome3)s; }
 QToolButton[role="tool"]:pressed { background: %(chrome_line)s; }
 QToolButton[role="tool"]:disabled { color: %(chrome_off)s; }
 QToolButton[role="tool"][on="true"] { background: rgba(63, 185, 80, 0.22); }
+QToolButton[role="tool"][rec="true"] { background: %(red)s; color: #ffffff; }
 QLabel#stateText { color: %(chrome_text)s; font-weight: 500; }
 QLabel#stateSub { color: %(chrome_dim)s; font-size: 11px; }
 QPushButton#stop { background: %(red)s; border: 0; border-radius: 6px; min-width: 112px; max-width: 112px;

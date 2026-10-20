@@ -142,6 +142,12 @@ class TopToolbar(QToolBar):
         home_ok = self.cfg.home_confirmed and self.cfg.home_joints_deg is not None
         self.home_btn.setEnabled(home_ok and live and state.mode is Mode.IDLE)
         self.home_btn.setToolTip("" if home_ok else "Home pose not confirmed in the robot YAML (home_confirmed)")
+        dragging = state.mode is Mode.DRAG
+        self.drag_btn.setText("End drag" if dragging else "Drag mode")
+        set_flag(self.drag_btn, "on", dragging)
+        self.drag_btn.setEnabled(live and (dragging or state.mode is Mode.IDLE))
+        self.drag_btn.setToolTip("Guide the arm by hand. Needs the right payload set on the controller. STOP also "
+                                 "ends drag." if not dragging else "The arm follows your hand; click to hold it.")
         self.state_label.setText(state_text(state, connected))
 
 

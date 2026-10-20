@@ -113,3 +113,15 @@ def test_lerobot_writer_needs_lerobot(tmp_path):
 
     writer = LeRobotWriter(tmp_path / "ds", "botswain/test", 30, build_features(6, {}), "fake")
     writer.finalize()
+
+
+def test_input_source_is_recorded(worker):
+    from dataclasses import replace
+
+    from botswain.record.recorder import SOURCE_CODES, Recorder, build_features
+
+    names = build_features(6, {})["observation.input_source"]["names"]
+    assert names == ["source (0 none, 1 gui, 2 phone, 3 gamepad, 4 vr, 5 drag)"]
+    worker.commanded = replace(worker.commanded, source="vr")  # the last target came from VR...
+    frame = Recorder(worker, {}, 30, writer=None).sample()
+    assert frame["observation.input_source"][0] == SOURCE_CODES[""] == 0  # ...but nothing drives the arm now

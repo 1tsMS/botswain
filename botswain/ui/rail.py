@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QSizePolicy, QToolBar, QToolButton, QWidget
 from botswain.ui.icons import icon
 from botswain.ui.theme import C, set_role
 
-PAGES = ("Script", "Blocks", "Points", "Jog", "Teleop", "Cameras", "Settings")
+PAGES = ("Script", "Blocks", "Points", "Jog", "Teleop", "VR", "Cameras", "Settings")
 
 
 class Rail(QToolBar):

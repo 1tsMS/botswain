@@ -255,6 +255,13 @@ class Gripper:
 
 
 @dataclass(frozen=True)
+class Drag:
+    """Hand-guiding (drag teach): on = the arm goes compliant and follows the operator's hand, off = it holds."""
+
+    on: bool
+
+
+@dataclass(frozen=True)
 class SetGripperForce:
     """Closing force for every later close, in % of the gripper's range. Stays set in the gripper."""
 
@@ -275,6 +282,6 @@ class Diagnose:
 
 Command = (
     Connect | Disconnect | Enable | Disable | ClearError | Stop | SetSpeed
-    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | SetGripperForce | Diagnose
+    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | SetGripperForce | Drag | Diagnose
     | RequestControl
 )

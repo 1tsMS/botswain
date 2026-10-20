@@ -156,6 +156,30 @@ Teleop page > **Use game controller**. The arm moves only while **LB** is held.
 The sticks set a speed; the target goes through the same teleop safety rules as the phone. "Phone forward is
 robot" on the Mapping panel also turns the controller's axes.
 
+### VR (Meta Quest)
+**VR** page, **Start VR server** (HTTPS port 4444). No lab network needed: turn on the Windows mobile hotspot,
+join the Quest to it, open the https address in **Meta Quest Browser**, type the key, accept the certificate
+warning, press **Enter**. Passthrough shows the real room (greyscale on Quest 2).
+
+| Right controller | Does |
+|---|---|
+| squeeze grip | clutch: hold to move. Let go, move your hand, squeeze again to re-centre |
+| trigger | gripper open / close |
+
+The pose is the controller's grip (palm) pose as tracked by the headset, so the headset must be on and see the
+controllers. Lost tracking, leaving VR or closing the page releases the clutch at once. Only one input moves the
+arm at a time: while the headset streams, phone and gamepad targets are ignored (and the other way round).
+Recordings store which input drives the arm at each frame in `observation.input_source`.
+
+### Drag teach (hand-guiding)
+**Drag mode** (toolbar, Robot group) puts an enabled, idle arm in hand-guiding: push it where you want, click
+**End drag** to hold it there. STOP also ends drag. The arm's own drag button works too; Botswain sees the mode
+either way. Before the first drag, check the payload (tool mass) in DobotStudio: a wrong payload makes the arm sag
+or drift. Jogging and teleop are refused while dragging; the gripper still works (Jog page buttons, gamepad A).
+
+Recording a drag episode: start drag, press Record, guide the arm, Save. Drag frames are tagged `drag`, and as
+there is no command, their `action` is the **next** frame's measured pose: "go where the hand took the arm".
+
 ### Blocks
 Drag-and-drop programs. Put blocks inside **when Run is pressed** and press **Run**: move to a saved point,
 move relative, move to a pose or joint angles, home, gripper, speed, wait, repeat. The running block is
@@ -178,6 +202,7 @@ Every frame (30 per second) holds:
 | Key | Content |
 |---|---|
 | `observation.state` | measured joints, TCP pose, gripper |
+| `observation.input_source` | which input drives the arm at that frame: 0 none (idle), 1 gui, 2 phone, 3 gamepad, 4 vr, 5 drag |
 | `action` | the target actually sent, after the safety gate |
 | `observation.command_raw` | the input before the gate (shows clamping) |
 | `observation.controller_target` | the controller's own target |

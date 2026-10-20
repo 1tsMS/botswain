@@ -25,6 +25,7 @@ from botswain.core.types import (
     Diagnose,
     Disable,
     Disconnect,
+    Drag,
     Enable,
     Gripper,
     JogHold,
@@ -72,6 +73,7 @@ class Commanded:
     raw: Pose | None = None
     sent: Pose | None = None
     gripper_open: bool | None = None
+    source: str = ""  # who produced the pose target: "gui" (moves, points, home), "phone", "gamepad", "vr"
 
 
 class RobotWorker:
@@ -82,7 +84,9 @@ class RobotWorker:
         self.publish_period_ns = int(1e9 / publish_hz)
         self.on_state: Callable[[RobotState], None] | None = None
         self.on_log: Callable[[str, str], None] | None = None
-        self.on_teleport: Callable[[], None] | None = None  # the input should re-anchor (teleop mapping)
+        # source -> "re-anchor your mapping" (called when the gate refuses that source's jump as a teleport)
+        self.teleport_handlers: dict[str, Callable[[], None]] = {}
+        self._stream_owner: str | None = None  # the input that is moving the arm; others wait until it lets go
         self.last_command: CommandRecord | None = None
         self.commanded = Commanded()  # replaced as a whole, so readers on other threads see a consistent one
 
@@ -119,7 +123,16 @@ class RobotWorker:
             self._queue.put(cmd)
 
     def stream(self, cmd: StreamTarget) -> None:
-        """Teleop input (any thread). Not queued: only the newest target matters, one goes out per period."""
+        """Teleop input (any thread). Not queued: only the newest target matters, one goes out per period.
+
+        One input at a time: while one source streams, another source's targets are dropped, so a phone and a
+        headset held at once can't pull the arm back and forth.
+        """
+        owner = self._stream_owner
+        if owner is not None and cmd.source != owner:
+            if cmd.hold:
+                self._log_rule("stream_owner", "warn", f"{cmd.source} ignored: {owner} is moving the arm")
+            return
         self._stream_input_ns = cmd.t_ns
         self._stream_latest = cmd
 
@@ -143,6 +156,17 @@ class RobotWorker:
     @property
     def pending(self) -> int:
         return self._queue.qsize()
+
+    def active_source(self, state: RobotState) -> str:
+        """Which input is driving the arm right now (for recordings): the streaming input, "drag" while the
+        operator pushes the arm by hand, "gui" during a GUI move or jog (points, home, Blocks too), else ""."""
+        if self._streaming and self._stream_owner:
+            return self._stream_owner
+        if state.mode is Mode.DRAG:
+            return "drag"
+        if state.mode in (Mode.MOVING, Mode.JOGGING):
+            return "gui"
+        return ""
 
     @property
     def running(self) -> bool:
@@ -219,7 +243,7 @@ class RobotWorker:
         if rules:
             self._log_rule(rules, "info", f"{name} clamped by {rules}")
         if isinstance(cmd, MoveTo) and isinstance(cmd.target, Pose):
-            self.commanded = replace(self.commanded, t_ns=now, raw=cmd.target, sent=verdict.cmd.target)
+            self.commanded = replace(self.commanded, t_ns=now, raw=cmd.target, sent=verdict.cmd.target, source="gui")
         elif isinstance(cmd, Gripper):
             self.commanded = replace(self.commanded, gripper_open=cmd.open)
         self._execute(verdict.cmd)
@@ -263,6 +287,9 @@ class RobotWorker:
                 self._log("error", "StreamTarget must go through worker.stream(), not the queue")
             case Gripper(open=is_open):
                 self._call("gripper", d.gripper, is_open)
+            case Drag(on=on):
+                if self._call("drag", d.drag, on):
+                    self._log("info", "drag mode ON: guide the arm by hand" if on else "drag mode off")
             case SetGripperForce(pct=pct):
                 if self._call("gripper_force", d.set_gripper_force, pct):
                     self._log("info", f"gripper closing force {pct} %")
@@ -336,8 +363,8 @@ class RobotWorker:
             if verdict.rule in ("hold", "stale", "ready"):
                 if self._streaming:
                     self._stop_stream()
-            elif verdict.rule == "teleport" and self.on_teleport is not None:
-                self.on_teleport()
+            elif verdict.rule == "teleport" and cmd.source in self.teleport_handlers:
+                self.teleport_handlers[cmd.source]()
             if verdict.rule != "hold":
                 self._log_rule(verdict.rule, "warn", f"stream rejected ({verdict.rule}): {verdict.reason}")
             return
@@ -345,9 +372,10 @@ class RobotWorker:
         self.last_command = CommandRecord(now, cmd, verdict.cmd, rules)
         if rules:
             self._log_rule(f"stream:{rules}", "info", f"stream clamped by {rules}")
-        self.commanded = replace(self.commanded, t_ns=now, raw=cmd.pose, sent=verdict.cmd.pose)
+        self.commanded = replace(self.commanded, t_ns=now, raw=cmd.pose, sent=verdict.cmd.pose, source=cmd.source)
         if self._call("stream_target", self.driver.stream_target, verdict.cmd.pose):
             self._streaming = True
+            self._stream_owner = cmd.source  # only once a target really went out; cleared when the stream ends
             self._last_stream_ns = now
         else:
             # Do not hammer the controller 33 times a second with a refused command: stop the stream and
@@ -362,6 +390,7 @@ class RobotWorker:
 
     def _end_stream(self) -> None:
         self._streaming = False
+        self._stream_owner = None
         self._stream_latest = None
         self.gate.reset_stream(None)
 

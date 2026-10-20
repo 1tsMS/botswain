@@ -176,11 +176,11 @@ def test_teleop_page_starts_and_stops_server(qtbot, make_window, monkeypatch):
     page = w.teleop_page
     page.toggle_server()
     assert page.server is not None
-    qtbot.waitUntil(lambda: str(port) in page.url_label.text(), timeout=1000)
-    assert page.server.token in page.key_label.text()  # typeable key next to the QR code
-    assert not page.qr_label.isHidden() and not page.qr_label.pixmap().isNull()
+    qtbot.waitUntil(lambda: str(port) in page.link.url_label.text(), timeout=1000)
+    assert page.server.token in page.link.key_label.text()  # typeable key next to the QR code
+    assert not page.link.qr_label.isHidden() and not page.link.qr_label.pixmap().isNull()
     page.toggle_server()
-    assert page.server is None and page.qr_label.isHidden()
+    assert page.server is None and page.link.qr_label.isHidden()
 
 
 def test_camera_dock_follows_cameras_page(qtbot, make_window):

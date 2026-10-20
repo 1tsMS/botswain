@@ -158,4 +158,6 @@ class EpisodeBar(QWidget):
         elif rec:
             self.status.setText(f"● recording  {time.perf_counter() - self._t0:5.1f} s  {self.session.frames} frames")
         else:
-            self.status.setText(f"{self.session.episodes_saved} episode(s) saved · folder {self.dataset_root}")
+            state = ("OPEN: press Close dataset to finish the files" if self.session.recorder is not None
+                     else "closed, ready to check")
+            self.status.setText(f"{self.session.episodes_saved} episode(s) saved · {state} · folder {self.dataset_root}")

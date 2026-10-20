@@ -46,7 +46,7 @@ class FakeDriver(Driver):
         self.joint_speed_deg_s = joint_speed_deg_s
         self.capabilities = Capabilities(
             name=cfg.name, dof=cfg.dof, step_jog=True, hold_jog=True, streaming=True,
-            stream_rate_hz=1.0 / cfg.stream.period_s, gripper=cfg.gripper is not None, drag_mode=False,
+            stream_rate_hz=1.0 / cfg.stream.period_s, gripper=cfg.gripper is not None, drag_mode=True,
             gripper_force=cfg.gripper is not None,
             frames=("base", "tool"), max_tcp_speed_mm_s=lin_speed_mm_s,
         )
@@ -165,8 +165,24 @@ class FakeDriver(Driver):
         # No latency and no link check: stop must always work and never raise.
         with self._lock:
             self._halt()
-            if self._mode in (Mode.MOVING, Mode.JOGGING, Mode.STREAMING):
+            if self._mode in (Mode.MOVING, Mode.JOGGING, Mode.STREAMING, Mode.DRAG):
                 self._mode = Mode.IDLE
+
+    def drag(self, on: bool) -> None:
+        self._command()
+        with self._lock:
+            if on:
+                self._require_mode(Mode.IDLE)
+                self._halt()
+                self._mode = Mode.DRAG
+            elif self._mode is Mode.DRAG:
+                self._mode = Mode.IDLE
+
+    def push(self, dq_deg: tuple[float, ...]) -> None:
+        """A hand pushing the arm in drag mode (tests and demos): joints move, nothing else does."""
+        with self._lock:
+            if self._mode is Mode.DRAG:
+                self._q = self._q + np.asarray(dq_deg, dtype=float)
 
     def set_speed(self, pct: int) -> None:
         self._command()

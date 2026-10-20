@@ -49,6 +49,15 @@ def stop() -> str:
     return "Stop()"
 
 
+def start_drag() -> str:
+    """Drag (hand-guiding) mode: same name in the V3 and V4 command sets. Robot must be enabled and idle."""
+    return "StartDrag()"
+
+
+def stop_drag() -> str:
+    return "StopDrag()"
+
+
 def robot_mode() -> str:
     return "RobotMode()"
 

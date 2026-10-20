@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Botswain VR</title>
+<style>
+  :root { --ink: #f2f2ee; --bg: #111; --dim: #9a9a94; --line: #f2f2ee; --ok: #3fb950; --bad: #e5322d; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 22px/1.4 system-ui, sans-serif; }
+  main { max-width: 760px; margin: 0 auto; padding: 32px 24px; }
+  h1 { font-size: 40px; letter-spacing: .04em; margin: 0 0 4px; text-transform: uppercase; }
+  .tag { display: inline-block; border: 2px solid var(--line); padding: 2px 10px; font-size: 16px;
+         letter-spacing: .12em; text-transform: uppercase; }
+  #status { margin: 24px 0; padding: 14px 16px; border: 2px solid var(--line); font-family: ui-monospace, monospace; }
+  #status.ok { border-color: var(--ok); } #status.bad { border-color: var(--bad); }
+  button { font: 600 28px system-ui, sans-serif; padding: 18px 36px; background: var(--ink); color: var(--bg);
+           border: 3px solid var(--ink); text-transform: uppercase; letter-spacing: .06em; }
+  button:disabled { opacity: .35; }
+  button:active { transform: scale(.97); }
+  table { border-collapse: collapse; margin-top: 28px; width: 100%; }
+  td { border-top: 1px solid #333; padding: 10px 8px; vertical-align: top; }
+  td:first-child { color: var(--dim); width: 38%; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Botswain</h1><span class="tag">VR teleop · right hand</span>
+  <div id="status">connecting...</div>
+  <button id="enter" disabled>Enter</button>
+  <table>
+    <tr><td>Squeeze grip</td><td>hold to move the arm (clutch). Let go, move your hand, squeeze again to re-centre.</td></tr>
+    <tr><td>Trigger</td><td>gripper open / close</td></tr>
+    <tr><td>Stop</td><td>let go of the grip. Space or Esc on the laptop stops everything.</td></tr>
+    <tr><td>Lost tracking</td><td>the arm stops; squeeze again once the controller is seen.</td></tr>
+  </table>
+</main>
+<script>
+"use strict";
+// Same clutch thresholds as botswain/teleop/vr.py; here they only drive the haptic tick, the laptop decides.
+const CLUTCH_ON = 0.6, CLUTCH_OFF = 0.4;
+const statusEl = document.getElementById("status"), enterBtn = document.getElementById("enter");
+let ws = null, session = null, refSpace = null, gl = null, clutch = false, sent = 0;
+
+function say(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
+
+function connect() {
+  ws = new WebSocket("wss://" + location.host + "/ws");
+  ws.onopen = () => { say("linked to the laptop. Press Enter, then squeeze the right grip to move.", "ok"); check(); };
+  ws.onclose = () => { say("link to the laptop lost. Reload this page (the key may have changed).", "bad");
+                       enterBtn.disabled = true; };
+}
+
+async function check() {
+  if (!navigator.xr) { say("this browser has no WebXR: open the address in Meta Quest Browser.", "bad"); return; }
+  const vr = await navigator.xr.isSessionSupported("immersive-vr").catch(() => false);
+  const ar = await navigator.xr.isSessionSupported("immersive-ar").catch(() => false);
+  enterBtn.disabled = !(ar || vr);
+  enterBtn.dataset.mode = ar ? "immersive-ar" : "immersive-vr";  // passthrough when the headset offers it
+  if (!ar && !vr) say("WebXR is present but no immersive session is supported here.", "bad");
+}
+
+function send(msg) {
+  // Drop instead of queueing: an old pose sent late is worse than a skipped one.
+  if (ws && ws.readyState === 1 && ws.bufferedAmount < 4096) { ws.send(JSON.stringify(msg)); sent++; }
+}
+
+function released() { return { type: "vr", right: { tracked: false }, left: { tracked: false }, head: null }; }
+
+function hand(frame, src) {
+  if (!src || !src.gripSpace || !src.gamepad) return { tracked: false };
+  const pose = frame.getPose(src.gripSpace, refSpace);
+  if (!pose || pose.emulatedPosition) return { tracked: false };  // IMU-only guess: never drive the arm with it
+  const p = pose.transform.position, q = pose.transform.orientation;
+  const b = src.gamepad.buttons, ax = src.gamepad.axes;  // xr-standard: 0 trigger, 1 grip, 4 A/X, 5 B/Y
+  return { tracked: true, pos: [p.x, p.y, p.z], quat: [q.x, q.y, q.z, q.w],
+           trigger: b[0] ? b[0].value : 0, grip: b[1] ? b[1].value : 0,
+           a: !!(b[4] && b[4].pressed), b: !!(b[5] && b[5].pressed), stick: [ax[2] || 0, ax[3] || 0] };
+}
+
+function pulse(src, strength, ms) {
+  const h = src && src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0];
+  if (h && h.pulse) h.pulse(strength, ms).catch(() => {});
+}
+
+function onFrame(t, frame) {
+  session.requestAnimationFrame(onFrame);
+  const layer = session.renderState.baseLayer;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+  gl.clearColor(0, 0, 0, 0);  // transparent: passthrough shows the real room and the arm
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  let rightSrc = null, leftSrc = null;
+  for (const s of session.inputSources) {
+    if (s.handedness === "right") rightSrc = s; else if (s.handedness === "left") leftSrc = s;
+  }
+  const right = hand(frame, rightSrc), left = hand(frame, leftSrc);
+  const now = right.tracked && right.grip > (clutch ? CLUTCH_OFF : CLUTCH_ON);
+  if (now !== clutch) { clutch = now; pulse(rightSrc, now ? 0.5 : 0.25, now ? 30 : 15); }
+  const view = frame.getViewerPose(refSpace);
+  const head = view ? { pos: [view.transform.position.x, view.transform.position.y, view.transform.position.z],
+                        quat: [view.transform.orientation.x, view.transform.orientation.y,
+                               view.transform.orientation.z, view.transform.orientation.w] } : null;
+  send({ type: "vr", right: right, left: left, head: head });
+}
+
+async function enter() {
+  try {
+    session = await navigator.xr.requestSession(enterBtn.dataset.mode, { requiredFeatures: ["local-floor"] });
+  } catch (e) { say("could not start: " + e.message, "bad"); return; }
+  const canvas = document.createElement("canvas");
+  gl = canvas.getContext("webgl", { xrCompatible: true, alpha: true });
+  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl, { alpha: true }) });
+  refSpace = await session.requestReferenceSpace("local-floor");
+  session.addEventListener("end", () => { send(released()); clutch = false; session = null;
+                                          say("left VR. Press Enter to go back in.", "ok"); });
+  session.requestAnimationFrame(onFrame);
+  say("in VR (" + enterBtn.dataset.mode + ")", "ok");
+}
+
+enterBtn.addEventListener("click", enter);
+window.addEventListener("pagehide", () => send(released()));
+connect();
+</script>
+</body>
+</html>

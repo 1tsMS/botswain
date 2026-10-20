@@ -26,6 +26,7 @@ BODIES = {
            '<circle cx="8" cy="12" r="1.4" fill="currentColor"/><circle cx="16" cy="12" r="1.4" fill="currentColor"/>'
            '<circle cx="12" cy="16" r="1.4" fill="currentColor"/>',
     "teleop": '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>',
+    "vr": '<path d="M3 8h18v8h-6l-3-3-3 3H3z"/><circle cx="7.5" cy="12" r="1.3"/><circle cx="16.5" cy="12" r="1.3"/>',
     "cameras": '<rect x="3" y="6" width="13" height="12" rx="2"/><path d="m16 10 5-3v10l-5-3"/>',
     "settings": '<circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3'
                 'M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>',

@@ -61,8 +61,9 @@ class DobotDriver(Driver):
         self.capabilities = Capabilities(
             name=cfg.name, dof=6, step_jog=True, hold_jog=True, streaming=True,
             stream_rate_hz=1.0 / cfg.stream.period_s,
-            gripper=cfg.gripper is not None and cfg.gripper.type == "dh_modbus", drag_mode=False,
+            gripper=cfg.gripper is not None and cfg.gripper.type == "dh_modbus",
             frames=("base", "tool"), max_tcp_speed_mm_s=cfg.limits.max_tcp_speed_mm_s,
+            drag_mode=True,
             gripper_force=cfg.gripper is not None and cfg.gripper.type == "dh_modbus",
         )
         self._dash = DashboardClient(c.ip, c.dashboard_port)
@@ -192,6 +193,14 @@ class DobotDriver(Driver):
         if not self._connected:
             return
         failures = []
+        latest = self._latest
+        if latest is not None and latest[0].mode == 6:  # drag mode: end it explicitly, the arm holds where it is
+            try:
+                reply = self._dash.call(cmd.stop_drag())
+                if reply.error_id != 0:
+                    log.warning("StopDrag() answered %d", reply.error_id)
+            except DriverError as e:
+                failures.append(f"StopDrag(): {e.message}")
         try:
             reply = self._dash.call(cmd.move_jog(None))  # ends a hold-jog in every firmware
             if reply.error_id != 0:
@@ -307,6 +316,11 @@ class DobotDriver(Driver):
         reply = self._gripper_dev.open() if open else self._gripper_dev.close()
         log.info("gripper %s reply: %s", "open" if open else "close", reply)
         self._gripper_pos = 1.0 if open else 0.0  # commanded, not measured: DH position read-back comes later
+
+    def drag(self, on: bool) -> None:
+        """StartDrag()/StopDrag(). The payload on the controller must match the real tool, or the arm drifts
+        or sags in drag: check it in DobotStudio before the first drag."""
+        self._ok(self._dash, cmd.start_drag() if on else cmd.stop_drag())
 
     def set_gripper_force(self, pct: int) -> None:
         """Closing force for every later close (the gripper keeps it). Before init it waits for the first close."""

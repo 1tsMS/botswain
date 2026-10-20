@@ -8,6 +8,11 @@ times as extra features. Per frame:
 - observation.controller_target  the controller's own target (Dobot ToolVectorTarget)
 - observation.t_state_ns / t_command_ns / t_cam_<name>_ns  real arrival times (float64)
 - observation.images.<name>  newest camera frame
+Drag teach has no command: a drag frame's action (and command_raw) is the NEXT frame's measured TCP pose,
+"go where the hand took the arm". So every frame is written one tick late; the last drag frame of an episode
+gets its own pose (it stayed there).
+- observation.input_source  which input is driving the arm at that frame, as a number (legend in the feature's
+  names, so it travels with the dataset): 0 none (idle), 1 gui, 2 phone, 3 gamepad, 4 vr, 5 drag (by hand)
 """
 
 from __future__ import annotations
@@ -21,9 +26,12 @@ from typing import Protocol
 import numpy as np
 
 from botswain.control.worker import RobotWorker
-from botswain.core.types import AXES_CART
+from botswain.core.types import AXES_CART, RobotState
 
 log = logging.getLogger(__name__)
+
+SOURCE_CODES = {"": 0, "gui": 1, "phone": 2, "gamepad": 3, "vr": 4, "drag": 5}  # never renumber
+SOURCE_LEGEND = "source (" + ", ".join(f"{v} {k or 'none'}" for k, v in SOURCE_CODES.items()) + ")"
 
 
 class Writer(Protocol):
@@ -51,6 +59,7 @@ def build_features(dof: int, cameras: dict[str, tuple[int, int]]) -> dict:
         "observation.controller_target": vec(pose),
         "observation.t_state_ns": vec(["t"], "float64"),
         "observation.t_command_ns": vec(["t"], "float64"),
+        "observation.input_source": vec([SOURCE_LEGEND]),
     }
     for name, (h, w) in cameras.items():
         features[f"observation.t_cam_{name}_ns"] = vec(["t"], "float64")
@@ -70,6 +79,7 @@ class Recorder:
         self.frames = 0
         self.task = ""
         self.error: str | None = None
+        self._pending: tuple[dict, np.ndarray] | None = None  # (frame not written yet, its measured TCP pose)
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
 
@@ -89,6 +99,7 @@ class Recorder:
 
     def save_episode(self) -> int:
         self._end()
+        self._flush()
         n = self.frames
         if n:
             self.writer.save()
@@ -96,6 +107,7 @@ class Recorder:
 
     def discard_episode(self) -> None:
         self._end()
+        self._pending = None
         self.writer.discard()
         self.frames = 0
 
@@ -128,16 +140,39 @@ class Recorder:
                 time.sleep(delay)
             if self._stop.is_set():
                 break
-            self.writer.add(self.sample())
-            self.frames += 1
+            s = self.worker.latest_state()
+            self._emit(self._sample(s), np.array(s.tcp.as_list(), dtype=np.float32))
             k += 1
             behind = int((self._clock() - start) / period) - k
             if behind > 0:  # a slow frame: skip grid slots instead of bunching frames together
                 log.warning("recorder fell %d frame(s) behind", behind)
                 k += behind
 
+    def _emit(self, frame: dict, tcp: np.ndarray) -> None:
+        """Write the previous frame now that the next pose is known; keep this one back."""
+        if self._pending is not None:
+            self._write(self._pending[0], next_tcp=tcp)
+        self._pending = (frame, tcp)
+
+    def _flush(self) -> None:
+        if self._pending is not None:
+            frame, tcp = self._pending
+            self._write(frame, next_tcp=tcp)  # last frame: no next pose, the arm stays where it is
+            self._pending = None
+
+    def _write(self, frame: dict, next_tcp: np.ndarray) -> None:
+        if frame["observation.input_source"][0] == SOURCE_CODES["drag"]:
+            for key in ("action", "observation.command_raw"):
+                frame[key] = frame[key].copy()
+                frame[key][:6] = next_tcp
+        self.writer.add(frame)
+        self.frames += 1
+
     def sample(self) -> dict:
-        s = self.worker.latest_state()
+        """One frame as it is now (drag frames still carry the placeholder action)."""
+        return self._sample(self.worker.latest_state())
+
+    def _sample(self, s: RobotState) -> dict:
         c = self.worker.commanded
         grip = s.gripper_pos if s.gripper_pos is not None else s.gripper  # measured when the gripper reports it
         grip_meas = grip if grip is not None else np.nan
@@ -151,6 +186,8 @@ class Recorder:
             "observation.controller_target": np.array(s.tcp_target.as_list(), dtype=np.float32),
             "observation.t_state_ns": np.array([s.t_ns], dtype=np.float64),
             "observation.t_command_ns": np.array([c.t_ns], dtype=np.float64),
+            "observation.input_source": np.array([SOURCE_CODES.get(self.worker.active_source(s), 0)],
+                                                 dtype=np.float32),
             "task": self.task,
         }
         for name, cam in self.cameras.items():

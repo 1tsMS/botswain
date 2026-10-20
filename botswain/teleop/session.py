@@ -14,7 +14,7 @@ class TeleopSession:
         self.mapper = mapper
         self.last_sample: PhoneSample | None = None
         self._gripper_closed: bool | None = None
-        worker.on_teleport = mapper.request_reanchor
+        worker.teleport_handlers["phone"] = mapper.request_reanchor
 
     def on_sample(self, sample: PhoneSample) -> None:
         self.last_sample = sample

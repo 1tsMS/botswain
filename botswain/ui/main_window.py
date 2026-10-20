@@ -19,6 +19,7 @@ from botswain.core.types import (
     Connect,
     Disable,
     Disconnect,
+    Drag,
     Enable,
     Joints,
     Mode,
@@ -36,6 +37,7 @@ from botswain.ui.pages.placeholder_page import PlaceholderPage
 from botswain.ui.pages.points_page import PointsView
 from botswain.ui.pages.record_bar import EpisodeBar
 from botswain.ui.pages.teleop_page import TeleopPage
+from botswain.ui.pages.vr_page import VrPage
 from botswain.ui.rail import PAGES, Rail
 from botswain.ui.status_bar import StatusBar
 from botswain.ui.toolbar import TopToolbar
@@ -90,6 +92,7 @@ class MainWindow(QMainWindow):
         self.points = self._load_points(cfg)
         self.points_page = PointsView(self.points, self._submit, self._log, save=self._save_point)
         self.teleop_page = TeleopPage(worker, self._log)
+        self.vr_page = VrPage(worker, self._log)
         self.cameras_page = CamerasPage(self._log)
         home = cfg.home_joints_deg if cfg.home_confirmed else None
         self.runner = ProgramRunner(worker, self.points, home, log_cb=self._log)
@@ -102,7 +105,7 @@ class MainWindow(QMainWindow):
         self.jog_page.setMinimumSize(1000, 520)  # below this the page scrolls instead of squashing
         for name in PAGES:
             built = {"Jog": self.jog_page, "Points": self.points_page, "Teleop": self.teleop_page,
-                     "Cameras": self.cameras_page, "Blocks": self.blocks_page}
+                     "VR": self.vr_page, "Cameras": self.cameras_page, "Blocks": self.blocks_page}
             page = built.get(name) or PlaceholderPage(name, notes[name])
             self.pages[name] = page
             self._stack_items[name] = self._scrollable(page)
@@ -180,6 +183,8 @@ class MainWindow(QMainWindow):
         tb.connect_clicked.connect(self._toggle_connect)
         tb.doctor_clicked.connect(self.open_doctor)
         tb.enable_toggled.connect(lambda on: self.worker.submit(Enable() if on else Disable()))
+        tb.drag_clicked.connect(
+            lambda: self.worker.submit(Drag(self.worker.latest_state().mode is not Mode.DRAG)))
         tb.clear_clicked.connect(lambda: self.worker.submit(ClearError()))
         tb.stop_button.pressed.connect(self.stop_all)  # on press, not release
         tb.home_clicked.connect(self._home)
@@ -288,6 +293,7 @@ class MainWindow(QMainWindow):
         QApplication.instance().removeEventFilter(self.stop_filter)
         self.runner.abort()
         self.teleop_page.shutdown()
+        self.vr_page.shutdown()
         self.worker.shutdown()  # sends stop, then disconnects
         if self.episode_bar.session is not None and self.episode_bar.session.recorder is not None:
             self.episode_bar.session.close()  # finalize, or LeRobot leaves an unreadable dataset

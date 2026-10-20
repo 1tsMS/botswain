@@ -348,6 +348,16 @@ class FakeDobotController:
                 if self.mode == 9:
                     self.mode = 5 if self._enabled_before_alarm else 4
                 return 0, ""
+            case "startdrag":
+                if self.mode != 5:
+                    return -1, ""
+                self._halt()
+                self.mode = 6
+                return 0, ""
+            case "stopdrag":
+                if self.mode == 6:
+                    self.mode = 5
+                return 0, ""
             case "stop" | "resetrobot":
                 self._halt()
                 if self.mode in (7, 8):

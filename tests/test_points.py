@@ -20,17 +20,17 @@ def test_points_roundtrip_json(tmp_path):
 def test_duplicate_name_gets_suffix(tmp_path):
     store = PointStore(tmp_path / "p.json")
     assert store.add("P1", P, J).name == "P1"
-    assert store.add("P1", P, J).name == "P1 (2)"
-    assert store.add("P1", P, J).name == "P1 (3)"
+    assert store.add("P1", P, J).name == "P1_2"
+    assert store.add("P1", P, J).name == "P1_3"
 
 
 def test_rename_and_remove(tmp_path):
     store = PointStore(tmp_path / "p.json")
     store.add("a", P, J)
     store.add("b", P, J)
-    assert store.rename("a", "b").name == "b (2)"
+    assert store.rename("a", "b").name == "b_2"
     store.remove("b")
-    assert [p.name for p in PointStore(tmp_path / "p.json").all()] == ["b (2)"]
+    assert [p.name for p in PointStore(tmp_path / "p.json").all()] == ["b_2"]
 
 
 def test_bad_file_raises_instead_of_dropping_points(tmp_path):

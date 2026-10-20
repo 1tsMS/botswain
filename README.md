@@ -134,10 +134,20 @@ Every clamp and refusal is written to the log and counted in the status bar.
 
 ### 7. Saved points
 **Save point** (toolbar) or **Save current pose** (Points page) stores the pose and joints in
-`configs/robots/<robot>.points.json`. **Go to** (or double-click) moves there with a joint move through the gate.
+`configs/robots/<robot>.points.json`.
 
-**Home** (toolbar, or the Jog page next to Frame) is a joint move to `home_joints_deg`; it stays greyed out until the
-robot YAML says `home_confirmed: true`.
+The **Points** page is a table: Name, Move (joint / linear), Wait (s), X..Rz, J1..J6.
+- Double-click a cell to edit it. Names have no spaces (Space is STOP).
+- Numbers stay within **±10 mm / ±10°** of what was taught, and inside the joint limits: the editor will not take
+  more, so many small edits can never walk a point away. Editing a joint recomputes the pose with the robot model
+  (URDF); editing the pose recomputes the joints, and a pose the model cannot reach is refused.
+- Drag a row by its **number** to reorder.
+- Editing never moves the arm. **Go to** moves to the selected point (its own move kind); **Run all in order** visits
+  every point, waits its Wait, and stops on STOP, a gate refusal or a robot error.
+- The **Points** tab in the bottom dock is the quick list (Go to, Rename, Delete).
+
+**Home** (toolbar, or the Jog page next to Frame) is a joint move to the robot config's `home.joints_deg`; it stays
+greyed out until the config says `home: {confirmed: true}`.
 
 **Gripper** (DH, Jog page): under Open / Close the gripper's own status (moving, at position, object caught,
 object dropped) and its measured opening. **Close force** (20-100 %) is kept in the gripper and used by every close,
@@ -149,7 +159,12 @@ force, then holds and reports *object caught*.
 Chips: **Safety box** (shows and enforces the box), **Target**. The gripper drawn on the flange is a simple
 stand-in: the CR5 URDF has no gripper.
 
-### Phone teleop
+### Teleop
+One **Teleop** page for every input: pick **Phone**, **Game controller** or **VR headset** at the top. Each shows how
+to connect on the left, and its mapping and controls on the right. Only one input moves the arm at a time (the one
+that started first, until it lets go); the top right says which.
+
+#### Phone
 Needs an Android phone with ARCore, in Google Chrome, on the same WiFi as the laptop.
 
 1. One time, in an admin PowerShell (Windows firewall):
@@ -163,9 +178,9 @@ Start with motion scale 0.3 and rotation off. If Start does nothing, open the sa
 instead of `/?k=...`: it tells you what the phone is missing. **Make my own HTTPS certificate** replaces the
 teleop package's shared certificate (needs Git for Windows).
 
-### Game controller
+#### Game controller
 Any Xbox-style pad in **X-input mode** (Cosmic Byte and similar have an X-input / D-input switch).
-Teleop page > **Use game controller**. The arm moves only while **LB** is held.
+Teleop > Game controller > **Use game controller**. The arm moves only while **LB** is held.
 
 | Control | Does |
 |---|---|
@@ -183,8 +198,8 @@ Teleop page > **Use game controller**. The arm moves only while **LB** is held.
 The sticks set a speed; the target goes through the same teleop safety rules as the phone. "Phone forward is
 robot" on the Mapping panel also turns the controller's axes.
 
-### VR (Meta Quest)
-**VR** page, **Start VR server** (HTTPS port 4444). No lab network needed: turn on the Windows mobile hotspot,
+#### VR headset (Meta Quest)
+Teleop > VR headset > **Start VR server** (HTTPS port 4444). No lab network needed: turn on the Windows mobile hotspot,
 join the Quest to it, open the https address in **Meta Quest Browser**, type the key, accept the certificate
 warning, press **Enter**. Passthrough shows the real room (greyscale on Quest 2).
 
@@ -208,9 +223,15 @@ Recording a drag episode: start drag, press Record, guide the arm, Save. Drag fr
 there is no command, their `action` is the **next** frame's measured pose: "go where the hand took the arm".
 
 ### Blocks
-Drag-and-drop programs. Put blocks inside **when Run is pressed** and press **Run**: move to a saved point,
-move relative, move to a pose or joint angles, home, gripper, speed, wait, repeat. The running block is
-highlighted. **STOP** (or Space / Esc) aborts the program, and so does any command the safety gate refuses
+Drag-and-drop programs. Put blocks inside **when Run is pressed** and press **Run**. Categories:
+- **Motion**: move to a saved point (joint or in a line), move relative, to a pose, to joint angles, home, speed.
+- **Gripper**: open / close, close force; values *holds an object* and *opening %*.
+- **Robot state**: the tool's X..Rz and J1..J6 now, as values (e.g. *if tool Z < 300*).
+- **Logic**, **Loops** (repeat, while / until, count from-to), **Math**, **Variables**, **Wait & log**.
+
+Distances, waits and speeds take values, so variables and math work there. The running block is highlighted.
+Loops that never end are stopped after 100 000 rounds. There are no I/O blocks yet (the driver contract has no
+digital I/O). **STOP** (or Space / Esc) aborts the program, and so does any command the safety gate refuses
 or a robot error. Programs save as JSON in `programs/`. The editor never runs generated code: Botswain reads
 the blocks and sends each step through the safety gate, like a button press.
 

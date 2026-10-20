@@ -174,6 +174,11 @@ class RobotWorker:
         return ""
 
     @property
+    def stream_owner(self) -> str | None:
+        """The teleop input moving the arm right now ("phone", "gamepad", "vr"), or None."""
+        return self._stream_owner
+
+    @property
     def capabilities(self) -> Capabilities:
         """The arm's card plus what the end effector adds. The GUI reads this, not driver.capabilities."""
         caps = self.driver.capabilities

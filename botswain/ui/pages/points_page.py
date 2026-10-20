@@ -1,4 +1,5 @@
-"""Saved points list with Go to / Rename / Delete. Used as the Points page and as the Points dock tab."""
+"""Saved points as a quick list with Go to / Rename / Delete: the Points tab in the bottom dock.
+The Points page is the full table (points_table.py)."""
 
 from __future__ import annotations
 
@@ -106,7 +107,11 @@ class PointsView(QWidget):
             return
         new, ok = QInputDialog.getText(self, "Rename point", "Name (no spaces: Space is STOP):", text=point.name)
         if ok and new.strip():
-            renamed = self.store.rename(point.name, new)
+            try:
+                renamed = self.store.rename(point.name, new)
+            except ValueError as e:
+                self._log("error", f"rename: {e}")
+                return
             self._log("info", f"renamed point {point.name} -> {renamed.name}")
             self.changed.emit()
 

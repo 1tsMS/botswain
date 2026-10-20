@@ -175,8 +175,8 @@ def test_save_point_and_go_to_through_worker(qtbot, rig):
     ready(qtbot, worker, w)
     w.toolbar.save_point_btn.click()
     assert [p.name for p in w.points.all()] == ["P1"]
-    assert w.points_page.list.count() == 1 and w.points_dock_view.list.count() == 1
-    w.points_page.list.setCurrentRow(0)
+    assert w.points_page.table.rowCount() == 1 and w.points_dock_view.list.count() == 1
+    w.points_page.table.selectRow(0)
     w.points_page.go_btn.click()
     assert of(sent, MoveTo) == [MoveTo(w.points.get("P1").joints, "joint")]
 

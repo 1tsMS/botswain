@@ -21,6 +21,7 @@ class PairingLink(QWidget):
         self.qr_label = QLabel()
         self.qr_label.setVisible(False)
         self.key_label = QLabel("")
+        self.key_label.setVisible(False)
         self.key_label.setFont(mono_font(28))
         self.key_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         self.url_label = QLabel("Server off")
@@ -37,9 +38,11 @@ class PairingLink(QWidget):
         """QR of the first address (Wi-Fi / hotspot first, robot LAN last) and the key to type by hand."""
         if server is None:
             self.qr_label.setVisible(False)
+            self.key_label.setVisible(False)  # an empty 28 px line would leave a gap
             self.key_label.setText("")
             self.url_label.setText("Server off")
             return
+        self.key_label.setVisible(True)
         buf = io.BytesIO()
         segno.make(server.urls[0], error="m").save(buf, kind="png", scale=5, border=2)
         pixmap = QPixmap()

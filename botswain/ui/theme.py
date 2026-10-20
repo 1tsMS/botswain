@@ -124,6 +124,9 @@ QLabel[role="dockEmpty"] { color: %(chrome_dim)s; background: %(chrome)s; }
 QListWidget#points { background: %(field)s; border: 1px solid %(keyline)s; border-radius: 4px; color: %(ink)s; }
 QListWidget#points::item:selected { background: %(key_down)s; color: %(ink)s; }
 QListWidget#pointsDark { background: %(chrome)s; border: 0; color: %(log_text)s; }
+QTableWidget#pointsTable { background: %(field)s; border: 1px solid %(keyline)s; border-radius: 4px; color: %(ink)s;
+    gridline-color: %(keyline)s; }
+QTableWidget#pointsTable::item:selected { background: %(key_down)s; color: %(ink)s; }
 QListWidget#pointsDark::item:selected { background: %(chrome3)s; color: %(chrome_text)s; }
 QPlainTextEdit#log { background: %(chrome)s; color: %(log_text)s; border: 0; font-family: "IBM Plex Mono";
     font-size: 11.5px; padding: 4px 8px; }

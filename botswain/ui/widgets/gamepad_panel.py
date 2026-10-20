@@ -1,4 +1,4 @@
-"""Gamepad panel (Teleop page): enable the controller, see it live, the button map."""
+"""Gamepad panel (Teleop page): switch the controller on and see it live. The button map is on the page."""
 
 from __future__ import annotations
 
@@ -11,10 +11,6 @@ from botswain.control.worker import RobotWorker
 from botswain.teleop.gamepad import GamepadTeleop, PadState, XInputReader
 from botswain.ui.theme import mono_font, set_role
 from botswain.ui.widgets.panel import Panel
-
-MAP_TEXT = ("Hold LB to move (let go = stop) · left stick X/Y · RT up / LT down · right stick Rz / Ry · "
-            "RB slow · A gripper open/close · D-pad speed · Start record/save episode · Back discard · "
-            "X save point")
 
 
 class GamepadPanel(Panel):
@@ -39,9 +35,6 @@ class GamepadPanel(Panel):
         self.live = QLabel("")
         self.live.setFont(mono_font(12))
         self.body_layout.addWidget(self.live)
-        legend = set_role(QLabel(MAP_TEXT), "lab")
-        legend.setWordWrap(True)
-        self.body_layout.addWidget(legend)
         self._timer = QTimer(self)
         self._timer.setInterval(100)
         self._timer.timeout.connect(self.refresh)

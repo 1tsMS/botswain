@@ -1,4 +1,4 @@
-"""Left icon rail with labels, same order as the old app. Settings sits at the bottom."""
+"""Left icon rail with labels: the pages in the order they are used. Settings sits at the bottom."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QSizePolicy, QToolBar, QToolButton, QWidget
 from botswain.ui.icons import icon
 from botswain.ui.theme import C, set_role
 
-PAGES = ("Script", "Blocks", "Points", "Jog", "Teleop", "VR", "Cameras", "Settings")
+PAGES = ("Jog", "Teleop", "Cameras", "Points", "Blocks", "Settings")
 
 
 class Rail(QToolBar):

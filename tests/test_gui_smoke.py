@@ -203,3 +203,38 @@ def test_scan_button_lists_every_source(qtbot, make_window, monkeypatch):
     items = lambda: [page.choice.itemText(i) for i in range(page.choice.count())]
     qtbot.waitUntil(lambda: items() == [s.name for s in found] + ["All sources"], timeout=2000)
     assert page.show_btn.isEnabled() and page.scan_btn.isEnabled()
+
+
+
+def test_teleop_tab_holds_every_input(qtbot, make_window, monkeypatch):
+    import socket
+
+    from botswain.teleop import vr
+    from botswain.ui.pages import teleop_page
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    monkeypatch.setattr(vr, "PORT", port)
+    monkeypatch.setattr(teleop_page, "VR_PORT", port)
+    _, w = make_window()
+    assert "VR" not in w.rail.buttons and "Script" not in w.rail.buttons  # VR lives in Teleop now
+    assert list(w.rail.buttons) == ["Jog", "Teleop", "Cameras", "Points", "Blocks", "Settings"]
+    page = w.teleop_page
+    for i in range(3):
+        page.show_input(i)
+        assert page.stack.currentIndex() == i and page.input_buttons[i].isChecked()
+    monkeypatch.setattr(vr.VrServer, "__init__", _vr_init_on(port, vr.VrServer.__init__))
+    page.toggle_vr()
+    qtbot.waitUntil(lambda: str(port) in page.vr_link.url_label.text(), timeout=2000)
+    assert page.vr_server.token in page.vr_link.key_label.text()
+    page.toggle_vr()
+    assert page.vr_server is None and page.vr_link.url_label.text() == "Server off"
+
+
+def _vr_init_on(port, real_init):
+    def init(self, session, port_=None, host="127.0.0.1"):
+        real_init(self, session, port=port, host=host)
+
+    return init

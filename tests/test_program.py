@@ -118,3 +118,72 @@ def test_program_shape_is_checked(rig):
         runner.run(program(b("text_print")))
     with pytest.raises(ProgramError, match="finite"):
         runner.run(program(b("botswain_move_relative", AXIS="X", DIST="nan")))
+
+
+def num(n):
+    return {"shadow": {"type": "math_number", "fields": {"NUM": n}}}
+
+
+def value(kind, **fields):
+    return {"block": {"type": kind, "fields": fields}}
+
+
+def test_if_else_on_robot_state_and_variables(rig):
+    w, _, runner, _ = rig
+    z0 = w.latest_state().tcp.z
+    var = {"VAR": {"id": "v1"}}
+    set_d = {"type": "variables_set", "id": "set", "fields": var, "inputs": {"VALUE": num(-12)}}
+    move = {"type": "botswain_move_relative", "id": "mv", "fields": {"AXIS": "Z"},
+            "inputs": {"DIST": value("variables_get", **var)}}
+    up = {"type": "botswain_move_relative", "id": "up", "fields": {"AXIS": "Z"}, "inputs": {"DIST": num(99)}}
+    cond = {"block": {"type": "logic_compare", "fields": {"OP": "GT"},
+                      "inputs": {"A": value("botswain_tcp", AXIS="Z"), "B": num(z0 + 500)}}}
+    branch = {"type": "controls_if", "id": "if", "extraState": {"hasElse": True},
+              "inputs": {"IF0": cond, "DO0": {"block": up}, "ELSE": {"block": move}}}
+    runner.run(program(b("botswain_speed", PCT=100), set_d, branch))
+    assert w.latest_state().tcp.z == pytest.approx(z0 - 12, abs=1e-3)  # Z is not > z0+500: the else branch ran
+
+
+def test_count_loop_and_arithmetic(rig):
+    w, _, runner, _ = rig
+    x0 = w.latest_state().tcp.x
+    var = {"VAR": {"id": "i"}}
+    step = {"type": "botswain_move_relative", "id": "mv", "fields": {"AXIS": "X"}, "inputs": {"DIST": {"block": {
+        "type": "math_arithmetic", "fields": {"OP": "MULTIPLY"},
+        "inputs": {"A": value("variables_get", **var), "B": num(2)}}}}}
+    loop = {"type": "controls_for", "id": "for", "fields": var,
+            "inputs": {"FROM": num(1), "TO": num(3), "BY": num(1), "DO": {"block": step}}}
+    runner.run(program(b("botswain_speed", PCT=100), loop))
+    assert w.latest_state().tcp.x == pytest.approx(x0 + 12, abs=1e-3)  # 2 + 4 + 6
+
+
+def test_endless_while_is_stopped(rig, monkeypatch):
+    from botswain.control import program as prog
+
+    _, _, runner, _ = rig
+    monkeypatch.setattr(prog, "MAX_LOOP", 50)
+    monkeypatch.setattr(prog, "LOOP_PAUSE_S", 0.0)
+    loop = {"type": "controls_whileUntil", "id": "w", "fields": {"MODE": "WHILE"},
+            "inputs": {"BOOL": value("logic_boolean", BOOL="TRUE"),
+                       "DO": {"block": {"type": "botswain_log", "id": "l", "fields": {"TEXT": "x"}}}}}
+    with pytest.raises(ProgramError, match="never ends"):
+        runner.run(program(loop))
+
+
+def test_gripper_values_and_force(rig):
+    w, _, runner, _ = rig
+    w.driver.tool_bus.object_permille = 400
+    caught = {"type": "variables_set", "id": "c", "fields": {"VAR": {"id": "got"}},
+              "inputs": {"VALUE": value("botswain_gripper_caught")}}
+    force = {"type": "botswain_gripper_force", "id": "f", "inputs": {"PCT": num(35)}}
+    runner.run(program(force, b("botswain_gripper", STATE="close"), b("botswain_wait", SECONDS=0.6), caught))
+    assert runner._vars["got"] is True
+    assert w.latest_state().gripper_pos == pytest.approx(0.4)
+
+
+def test_empty_slot_and_unknown_blocks_are_refused(rig):
+    _, _, runner, _ = rig
+    with pytest.raises(ProgramError, match="empty"):
+        runner.run(program({"type": "botswain_wait", "id": "w", "inputs": {}}))
+    with pytest.raises(ProgramError, match="not supported"):
+        runner.run(program({"type": "procedures_callnoreturn", "id": "p"}))

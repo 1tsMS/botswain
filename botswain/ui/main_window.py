@@ -36,12 +36,11 @@ from botswain.ui.doctor_dialog import DoctorDialog
 from botswain.ui.pages.blocks_page import BlocksPage
 from botswain.ui.pages.cameras_page import CamerasPage
 from botswain.ui.pages.jog_page import JogPage
-from botswain.ui.pages.placeholder_page import PlaceholderPage
 from botswain.ui.pages.points_page import PointsView
+from botswain.ui.pages.points_table import PointsTable
 from botswain.ui.pages.record_bar import EpisodeBar
 from botswain.ui.pages.settings_page import SettingsPage, box_limits
 from botswain.ui.pages.teleop_page import TeleopPage
-from botswain.ui.pages.vr_page import VrPage
 from botswain.ui.rail import PAGES, Rail
 from botswain.ui.status_bar import StatusBar
 from botswain.ui.theme import set_flag
@@ -96,24 +95,21 @@ class MainWindow(QMainWindow):
         self.stack.setObjectName("workspace")
         self.jog_page = JogPage(cfg, caps, self._submit, self._log, view_3d=view_3d)
         self.points = self._load_points(cfg)
-        self.points_page = PointsView(self.points, self._submit, self._log, save=self._save_point)
-        self.teleop_page = TeleopPage(worker, self._log)
-        self.vr_page = VrPage(worker, self._log)
-        self.cameras_page = CamerasPage(self._log)
         home = cfg.home_joints_deg if cfg.home_confirmed else None
         self.runner = ProgramRunner(worker, self.points, home, log_cb=self._log)
+        self.points_page = PointsTable(self.points, cfg, self.runner, self._submit, self._log, save=self._save_point)
+        self.teleop_page = TeleopPage(worker, self._log)
+        self.cameras_page = CamerasPage(self._log)
         self.blocks_page = BlocksPage(self.runner, lambda: [p.name for p in self.points.all()], self._log)
         self.settings_page = SettingsPage(cfg, tool_cfg, worker, self._log, restart=self._restart,
                                           apply_box=self._apply_box)
-        notes = {"Script": "coming later"}
         self.pages: dict[str, QWidget] = {}
         self._stack_items: dict[str, QWidget] = {}
         self.jog_page.setMinimumSize(1000, 520)  # below this the page scrolls instead of squashing
         for name in PAGES:
             built = {"Jog": self.jog_page, "Points": self.points_page, "Teleop": self.teleop_page,
-                     "VR": self.vr_page, "Cameras": self.cameras_page, "Blocks": self.blocks_page,
-                     "Settings": self.settings_page}
-            page = built.get(name) or PlaceholderPage(name, notes[name])
+                     "Cameras": self.cameras_page, "Blocks": self.blocks_page, "Settings": self.settings_page}
+            page = built[name]
             self.pages[name] = page
             self._stack_items[name] = self._scrollable(page)
             self.stack.addWidget(self._stack_items[name])
@@ -318,7 +314,6 @@ class MainWindow(QMainWindow):
         QApplication.instance().removeEventFilter(self.stop_filter)
         self.runner.abort()
         self.teleop_page.shutdown()
-        self.vr_page.shutdown()
         self.worker.shutdown()  # sends stop, then disconnects
         if self.episode_bar.session is not None and self.episode_bar.session.recorder is not None:
             self.episode_bar.session.close()  # finalize, or LeRobot leaves an unreadable dataset

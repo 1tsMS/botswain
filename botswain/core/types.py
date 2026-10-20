@@ -257,6 +257,13 @@ class Gripper:
 
 
 @dataclass(frozen=True)
+class GripperOpening:
+    """Proportional gripper: move the jaws to this opening, 0 = closed .. 1 = fully open (VR trigger)."""
+
+    opening: float
+
+
+@dataclass(frozen=True)
 class Recover:
     """Stuck robot (alarm, controller silent): reconnect, stop, clear the error. Never enables."""
 
@@ -289,6 +296,6 @@ class Diagnose:
 
 Command = (
     Connect | Disconnect | Enable | Disable | ClearError | Stop | SetSpeed
-    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | SetGripperForce | Drag | Recover | Diagnose
-    | RequestControl
+    | JogStep | JogHold | JogTick | JogRelease | MoveTo | StreamTarget | Gripper | GripperOpening | SetGripperForce | Drag
+    | Recover | Diagnose | RequestControl
 )

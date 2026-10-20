@@ -227,14 +227,15 @@ def test_teleop_tab_holds_every_input(qtbot, make_window, monkeypatch):
         assert page.stack.currentIndex() == i and page.input_buttons[i].isChecked()
     monkeypatch.setattr(vr.VrServer, "__init__", _vr_init_on(port, vr.VrServer.__init__))
     page.toggle_vr()
-    qtbot.waitUntil(lambda: str(port) in page.vr_link.url_label.text(), timeout=2000)
-    assert page.vr_server.token in page.vr_link.key_label.text()
+    qtbot.waitUntil(lambda: str(port) in page.vr_link.address_label.text(), timeout=2000)
+    assert page.vr_link.address_label.font().bold() and page.vr_link.address_label.font().pixelSize() >= 36
+    assert "?k=" not in page.vr_link.address_label.text() and page.vr_link.key_label.isHidden()  # VR: no key
     page.toggle_vr()
     assert page.vr_server is None and page.vr_link.url_label.text() == "Server off"
 
 
 def _vr_init_on(port, real_init):
-    def init(self, session, port_=None, host="127.0.0.1"):
-        real_init(self, session, port=port, host=host)
+    def init(self, session, port_=None, host="127.0.0.1", **kwargs):
+        real_init(self, session, port=port, host=host, **kwargs)
 
     return init

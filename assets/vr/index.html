@@ -20,61 +20,619 @@
   table { border-collapse: collapse; margin-top: 28px; width: 100%; }
   td { border-top: 1px solid #333; padding: 10px 8px; vertical-align: top; }
   td:first-child { color: var(--dim); width: 38%; }
+  h2 { font-size: 18px; letter-spacing: .12em; text-transform: uppercase; color: var(--dim); margin: 28px 0 0; }
 </style>
+<script type="importmap">{ "imports": { "three": "/vendor/three.module.min.js" } }</script>
 </head>
 <body>
 <main>
-  <h1>Botswain</h1><span class="tag">VR teleop · right hand</span>
+  <h1>Botswain</h1><span class="tag">VR teleop · passthrough</span>
   <div id="status">connecting...</div>
   <button id="enter" disabled>Enter</button>
+  <h2>Right hand: drive</h2>
   <table>
-    <tr><td>Squeeze grip</td><td>hold to move the arm (clutch). Let go, move your hand, squeeze again to re-centre.</td></tr>
-    <tr><td>Trigger</td><td>gripper open / close</td></tr>
-    <tr><td>Stop</td><td>let go of the grip. Space or Esc on the laptop stops everything.</td></tr>
-    <tr><td>Lost tracking</td><td>the arm stops; squeeze again once the controller is seen.</td></tr>
+    <tr><td>Grip (squeeze)</td><td>hold to move the arm. Let go, move your hand, squeeze again to re-centre.</td></tr>
+    <tr><td>Hand / wrist</td><td>X Y Z; wrist tilt about X / Y when rotation following is on in Botswain</td></tr>
+    <tr><td>Stick left / right</td><td>turn the tool about Z (while the grip is held)</td></tr>
+    <tr><td>Trigger</td><td>gripper: pull to close, let go to open</td></tr>
+    <tr><td>A / B</td><td>motion scale - / + 10 %</td></tr>
+    <tr><td>Stick click</td><td>wrist rotation on / off</td></tr>
+  </table>
+  <h2>Left hand: set up</h2>
+  <table>
+    <tr><td>X</td><td>calibrate: put the white dot on the tool tip, press X. Move the arm, repeat (2 or more).</td></tr>
+    <tr><td>Stick</td><td>after placing: slide the robot to fine-tune it (up = away from you)</td></tr>
+    <tr><td>Trigger (hold)</td><td>place the robot: it snaps to the white dot (tool tip there, base where you point)
+      and follows your hand; line the outline up with the real arm, let go</td></tr>
+    <tr><td>Y (hold 1 s)</td><td>reset the calibration</td></tr>
+    <tr><td>Grip on a camera window</td><td>point at it, squeeze, move it, let go</td></tr>
+    <tr><td>Stop</td><td>let go of the right grip. Space or Esc on the laptop stops everything.</td></tr>
   </table>
 </main>
-<script>
-"use strict";
-// Same clutch thresholds as botswain/teleop/vr.py; here they only drive the haptic tick, the laptop decides.
+<script type="module">
+import * as THREE from "three";
+import { STLLoader } from "/vendor/STLLoader.js";
+
+// Same thresholds as botswain/teleop/vr.py; here they only drive haptics and the grab, the laptop decides.
 const CLUTCH_ON = 0.6, CLUTCH_OFF = 0.4;
+const NUDGE_DEADBAND = 0.15, NUDGE_MAX_M_S = 0.10;  // left stick slide: speed grows with deflection squared
+const STALE_MS = 500, CAM_PERIOD_MS = 66, RESET_HOLD_MS = 1000;
+const AMBER = 0xffb000, WHITE = 0xf2f2ee, RED = 0xff3b30, GREY = 0x9a9a94, CYAN = 0x00e5ff;
 const statusEl = document.getElementById("status"), enterBtn = document.getElementById("enter");
-let ws = null, session = null, refSpace = null, gl = null, clutch = false, sent = 0;
+
+// ---- link to the laptop (reconnects by itself) ----
+
+let ws = null, status = null, statusMs = 0, retries = 0, takenOver = false;
 
 function say(text, cls) { statusEl.textContent = text; statusEl.className = cls || ""; }
 
 function connect() {
   ws = new WebSocket("wss://" + location.host + "/ws");
-  ws.onopen = () => { say("linked to the laptop. Press Enter, then squeeze the right grip to move.", "ok"); check(); };
-  ws.onclose = () => { say("link to the laptop lost. Reload this page (the key may have changed).", "bad");
-                       enterBtn.disabled = true; };
+  ws.onopen = () => { retries = 0; say("linked to the laptop. Press Enter.", "ok"); };
+  ws.onmessage = (e) => {
+    const m = JSON.parse(e.data);
+    if (m.type !== "status") return;
+    status = m; statusMs = performance.now();
+    if (!xrSession) say(`linked · robot ${m.mode} · calibration: ${m.calib.note}`, "ok");
+  };
+  ws.onclose = (e) => {
+    ws = null; status = null;
+    if (e.code === 4000) {  // a newer page took over; reconnecting would just fight it
+      takenOver = true; say("another page took over the link. Reload this one to take it back.", "bad"); return;
+    }
+    retries++;
+    say(`link to the laptop lost, reconnecting (try ${retries})...`, "bad");
+    setTimeout(connect, Math.min(500 * retries, 3000));
+  };
 }
+
+function linked() { return ws && ws.readyState === 1 && status && performance.now() - statusMs < STALE_MS; }
+
+function command(msg) {
+  // One-shot commands (placement, calibration, page errors) always go out: dropping one loses it for good.
+  if (ws && ws.readyState === 1) { ws.send(JSON.stringify(msg)); return true; }
+  return false;
+}
+
+let lastReport = 0;
+function report(error) {
+  // Page errors land in Botswain's log (logs/botswain.log): the headset has no console to look at.
+  if (performance.now() - lastReport < 1000) return;
+  lastReport = performance.now();
+  command({ type: "log", text: String((error && error.stack) || error).slice(0, 800) });
+}
+window.addEventListener("error", (e) => report(e.error || e.message));
+window.addEventListener("unhandledrejection", (e) => report(e.reason));
+
+function send(msg) {
+  // Drop instead of queueing: an old pose sent late is worse than a skipped one.
+  if (ws && ws.readyState === 1 && ws.bufferedAmount < 4096) ws.send(JSON.stringify(msg));
+}
+
+function released() { return { type: "vr", right: { tracked: false }, left: { tracked: false }, head: null }; }
 
 async function check() {
   if (!navigator.xr) { say("this browser has no WebXR: open the address in Meta Quest Browser.", "bad"); return; }
-  const vr = await navigator.xr.isSessionSupported("immersive-vr").catch(() => false);
   const ar = await navigator.xr.isSessionSupported("immersive-ar").catch(() => false);
+  const vr = await navigator.xr.isSessionSupported("immersive-vr").catch(() => false);
   enterBtn.disabled = !(ar || vr);
   enterBtn.dataset.mode = ar ? "immersive-ar" : "immersive-vr";  // passthrough when the headset offers it
   if (!ar && !vr) say("WebXR is present but no immersive session is supported here.", "bad");
 }
 
-function send(msg) {
-  // Drop instead of queueing: an old pose sent late is worse than a skipped one.
-  if (ws && ws.readyState === 1 && ws.bufferedAmount < 4096) { ws.send(JSON.stringify(msg)); sent++; }
+// ---- scene ----
+
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setClearColor(0x000000, 0);  // transparent: passthrough shows the real room and the arm
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType("local-floor");
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(70, 1, 0.02, 20);
+
+const robotRoot = new THREE.Group();  // robot base frame (z up, metres), placed by the calibration
+robotRoot.matrixAutoUpdate = false;
+robotRoot.visible = false;
+scene.add(robotRoot);
+const links = [];
+
+function outline(geometry, color, fillOpacity) {
+  const g = new THREE.Group();
+  g.matrixAutoUpdate = false;
+  g.add(new THREE.Mesh(geometry, new THREE.MeshBasicMaterial({ color, transparent: true, opacity: fillOpacity,
+                                                             depthWrite: false })));
+  g.add(new THREE.LineSegments(new THREE.EdgesGeometry(geometry, 30), new THREE.LineBasicMaterial({ color })));
+  return g;
 }
 
-function released() { return { type: "vr", right: { tracked: false }, left: { tracked: false }, head: null }; }
+let tipName = "tool tip";  // what the white dot must touch, from /robot.json
 
-function hand(frame, src) {
-  if (!src || !src.gripSpace || !src.gamepad) return { tracked: false };
-  const pose = frame.getPose(src.gripSpace, refSpace);
-  if (!pose || pose.emulatedPosition) return { tracked: false };  // IMU-only guess: never drive the arm with it
+async function loadRobot() {
+  const robot = await (await fetch("/robot.json")).json();
+  tipName = robot.tip;
+  const loader = new STLLoader();
+  for (const m of robot.meshes) {
+    const group = outline(await loader.loadAsync(m.url), m.base ? WHITE : AMBER, 0.10);
+    links.push(group);
+    robotRoot.add(group);
+  }
+}
+
+const tip = new THREE.Mesh(new THREE.SphereGeometry(0.012, 16, 12), new THREE.MeshBasicMaterial({ color: CYAN }));
+robotRoot.add(tip);
+
+const box = new THREE.Group();  // a unit cube scaled to the safety box
+box.matrixAutoUpdate = false;
+const unit = new THREE.BoxGeometry(1, 1, 1);
+const boxFaces = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ color: RED, transparent: true, opacity: 0.06,
+                                                                     depthWrite: false, side: THREE.DoubleSide }));
+const boxEdges = new THREE.LineSegments(new THREE.EdgesGeometry(unit), new THREE.LineBasicMaterial({ color: RED }));
+box.add(boxFaces, boxEdges);
+robotRoot.add(box);
+
+function applyStatus() {
+  const cal = status && status.calib.matrix;
+  robotRoot.visible = !!(cal || placing.preview);
+  if (!robotRoot.visible || !status) return;
+  if (placing.preview) robotRoot.matrix.copy(placing.preview); else robotRoot.matrix.set(...cal);
+  if (status.links.length === links.length) links.forEach((g, i) => g.matrix.set(...status.links[i]));
+  tip.position.set(...status.tip);
+  const [[x0, x1], [y0, y1], [z0, z1]] = status.box;
+  box.matrix.compose(new THREE.Vector3((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), new THREE.Quaternion(),
+                     new THREE.Vector3(x1 - x0, y1 - y0, z1 - z0));
+  const color = status.box_on ? RED : GREY;
+  boxEdges.material.color.setHex(color);
+  boxFaces.material.color.setHex(color);
+}
+
+// ---- cards: canvas-drawn panels (wrist HUD, alert, window headers, controls) ----
+
+const INK = "#f2f2ee", DIM = "#9a9a94", BLACK = "#111111", AMBER_CSS = "#ffb000", RED_CSS = "#ff3b30",
+      GREEN_CSS = "#3fb950", CYAN_CSS = "#00e5ff";
+const SANS = "Plex, system-ui, sans-serif", MONO = "'Plex Mono', ui-monospace, monospace";
+const cards = [];
+
+// IBM Plex from Botswain (assets/fonts, OFL). Until it loads the cards use the system font, then redraw.
+Promise.all([new FontFace("Plex", "url(/font/IBMPlexSans-SemiBold.ttf)", { weight: "600" }),
+             new FontFace("Plex Mono", "url(/font/IBMPlexMono-Medium.ttf)", { weight: "500" })]
+  .map((f) => f.load().then((loaded) => document.fonts.add(loaded))))
+  .then(() => cards.forEach((c) => { c.userData.key = ""; }))
+  .catch(() => { /* system font it is */ });
+
+function card(w, h, px) {
+  const canvas = document.createElement("canvas");
+  canvas.width = px; canvas.height = Math.round(px * h / w);
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.anisotropy = 4;
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h),
+                              new THREE.MeshBasicMaterial({ map: texture, transparent: true }));
+  mesh.userData = { canvas, texture, key: "" };
+  cards.push(mesh);
+  return mesh;
+}
+
+function paint(mesh, key, fn) {
+  // Redraw only when what it shows changed: a canvas upload every frame would cost the headset frames.
+  if (key === mesh.userData.key) return;
+  mesh.userData.key = key;
+  const { canvas, texture } = mesh.userData, c = canvas.getContext("2d");
+  c.clearRect(0, 0, canvas.width, canvas.height);
+  fn(c, canvas.width, canvas.height);
+  texture.needsUpdate = true;
+}
+
+function text(c, s, x, y, size, font, color, maxW) {
+  c.font = `${font === MONO ? 500 : 600} ${size}px ${font}`;
+  if (maxW && c.measureText(s).width > maxW) {  // shrink to fit: clipped words are worse than smaller ones
+    size = Math.floor(size * maxW / c.measureText(s).width);
+    c.font = `${font === MONO ? 500 : 600} ${size}px ${font}`;
+  }
+  c.fillStyle = color;
+  c.textBaseline = "alphabetic";
+  c.fillText(s, x, y);
+}
+
+function stamp(c, s, xRight, yMid, size, color, fill) {
+  // A bordered label like a rubber stamp: thick outline, uppercase mono, letter-spaced.
+  c.font = `500 ${size}px ${MONO}`;
+  const label = s.toUpperCase().split("").join(String.fromCharCode(8202));
+  const w = c.measureText(label).width + size, h = size * 1.5;
+  if (fill) { c.fillStyle = fill; c.fillRect(xRight - w, yMid - h / 2, w, h); }
+  c.lineWidth = Math.max(3, size / 9); c.strokeStyle = color;
+  c.strokeRect(xRight - w, yMid - h / 2, w, h);
+  c.fillStyle = color; c.textBaseline = "middle";
+  c.fillText(label, xRight - w + size / 2, yMid + 1);
+  c.textBaseline = "alphabetic";
+}
+
+function bar(c, x, y, w, h, frac, color) {
+  c.fillStyle = "#2a2a28"; c.fillRect(x, y, w, h);
+  c.fillStyle = color; c.fillRect(x, y, w * Math.min(Math.max(frac, 0), 1), h);
+  c.fillStyle = BLACK;
+  for (let i = 1; i < 10; i++) c.fillRect(x + w * i / 10 - 1, y, 3, h);  // tick marks every 10 %
+}
+
+function frameCard(c, W, H, title, tag) {
+  // Panel body, ink border, amber header strip with the title stamped in black.
+  const head = Math.round(H * 0.17);
+  c.fillStyle = "rgba(20,20,19,0.94)"; c.fillRect(0, 0, W, H);
+  c.fillStyle = AMBER_CSS; c.fillRect(0, 0, W, head);
+  let tagW = 0;
+  if (tag) {
+    c.font = `500 ${head * 0.3}px ${MONO}`;
+    tagW = c.measureText(tag).width;
+    text(c, tag, W - 28 - tagW, head * 0.64, head * 0.3, MONO, BLACK);
+  }
+  text(c, title, 28, head * 0.72, head * 0.62, SANS, BLACK, W - tagW - 96);  // never runs into the tag
+  c.lineWidth = 6; c.strokeStyle = INK; c.strokeRect(3, 3, W - 6, H - 6);
+  return head;
+}
+
+// Wrist display (left hand): state, speed, gripper, calibration.
+const hud = card(0.18, 0.115, 1024);
+const hudHolder = new THREE.Group();  // follows the left grip; the card sits above the wrist, facing up-back
+hudHolder.matrixAutoUpdate = false;
+hud.position.set(0, 0.075, 0.04);
+hud.rotation.x = -0.9;
+hud.renderOrder = 10;
+hud.material.depthTest = false;
+hudHolder.add(hud);
+scene.add(hudHolder);
+
+function hudState() {
+  if (!linked()) return { word: "NO LINK", color: RED_CSS, sub: takenOver ? "another page took over" : "reconnecting" };
+  if (placing.held) return { word: "PLACING", color: CYAN_CSS, sub: "line the outline up, let go of the trigger" };
+  if (placing.nudging) return { word: "SLIDING", color: CYAN_CSS, sub: "left stick: up = away from you" };
+  if (rightWhy) return { word: "HAND LOST", color: RED_CSS, sub: "right hand " + rightWhy };
+  if (status.need_release) return { word: "LET GO", color: AMBER_CSS, sub: "release the grip once" };
+  if (status.clutch) return { word: "MOVING", color: AMBER_CSS, sub: "let go of the grip to stop" };
+  return { word: "HOLD", color: INK, sub: "squeeze the right grip to move" };
+}
+
+function drawHud() {
+  const st = hudState(), s = status;
+  const closed = s && s.grip_cmd !== null ? 1 - s.grip_cmd : null;
+  const calib = !s ? "" : s.calib.matrix || s.calib.note !== "not calibrated" ? s.calib.note
+    : "NOT PLACED · HOLD LEFT TRIGGER AT THE TOOL TIP";  // until then directions come from the laptop setting
+  const key = JSON.stringify([st, s && s.mode, s && s.scale, s && s.rotation, closed, calib]);
+  paint(hud, key, (c, W, H) => {
+    const head = frameCard(c, W, H, "BOTSWAIN", "VR · RIGHT HAND DRIVES");
+    if (s) stamp(c, s.mode, W - 28, head + 62, 34, s.mode === "error" || s.mode === "collision" ? RED_CSS
+                 : s.mode === "streaming" ? AMBER_CSS : GREEN_CSS);
+    text(c, st.word, 28, head + 98, 96, SANS, st.color, W * 0.62);
+    text(c, st.sub, 30, head + 150, 38, MONO, DIM, W - 60);
+    const rows = [["SPEED", s ? s.scale / 100 : 0, s ? `${s.scale} %  ·  WRIST ${s.rotation ? "ON" : "OFF"}` : "-"],
+                  ["GRIP", closed ?? 0, closed === null ? "-" : `${Math.round(closed * 100)} % CLOSED`]];
+    rows.forEach(([label, frac, value], i) => {
+      const y = head + 214 + i * 96;
+      text(c, label, 30, y + 30, 30, MONO, DIM);
+      bar(c, 190, y + 4, 420, 34, frac, AMBER_CSS);
+      text(c, value, 636, y + 32, 34, SANS, INK, W - 666);
+    });
+    c.fillStyle = "#2a2a28"; c.fillRect(6, H - 92, W - 12, 3);
+    text(c, "CAL", 30, H - 36, 30, MONO, DIM);
+    text(c, calib, 110, H - 36, 32, SANS, s && s.calib.matrix ? INK : AMBER_CSS, W - 140);
+    if (s && !s.calib.matrix) { c.fillStyle = AMBER_CSS; c.fillRect(6, H - 89, 10, 83); }  // flag the warning
+  });
+}
+
+// Head-locked alert: set from this frame's head pose (three's camera is a frame late).
+const alertHolder = new THREE.Group();
+alertHolder.matrixAutoUpdate = false;
+const alertPanel = card(0.5, 0.1, 1200);
+alertPanel.position.set(0, -0.13, -0.7);
+alertPanel.renderOrder = 11;
+alertPanel.material.depthTest = false;
+alertHolder.add(alertPanel);
+scene.add(alertHolder);
+
+function alertText() {
+  if (!linked()) return takenOver ? "LINK TAKEN BY ANOTHER PAGE" : "LINK LOST · RECONNECTING";
+  if (status.fault) return "ROBOT: " + status.fault.toUpperCase();
+  if (status.mode === "error" || status.mode === "collision" || status.mode === "disconnected")
+    return "ROBOT " + status.mode.toUpperCase();
+  if (status.need_release) return "LET GO OF THE GRIP ONCE";
+  if (status.owner && status.owner !== "vr") return status.owner.toUpperCase() + " IS MOVING THE ARM";
+  return "";
+}
+
+function drawAlert(message) {
+  paint(alertPanel, message, (c, W, H) => {
+    c.fillStyle = "rgba(229,50,45,0.94)"; c.fillRect(0, 0, W, H);
+    c.lineWidth = 10; c.strokeStyle = "#ffffff"; c.strokeRect(5, 5, W - 10, H - 10);
+    c.fillStyle = "#ffffff"; c.fillRect(30, H / 2 - 30, 60, 60);  // stop block
+    text(c, message, 120, H / 2 + 26, 76, SANS, "#ffffff", W - 160);
+  });
+}
+
+// ---- windows: camera feeds and the controls card (left controller: point, squeeze grip, move) ----
+
+const windows = [];
+const raycaster = new THREE.Raycaster();
+let grabbed = null, leftGripDown = false;
+
+function makeWindow(name, offset, body, w, h) {
+  // body: the mesh the ray grabs. A border follows hover / grab; the pose is remembered per window.
+  const holder = new THREE.Group();
+  holder.matrixAutoUpdate = false;
+  const border = new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.PlaneGeometry(w + 0.012, h + 0.012)),
+                                        new THREE.LineBasicMaterial({ color: WHITE }));
+  holder.add(body, border);
+  holder.visible = false;
+  holder.userData = { name, offset, body, border, placed: false, saved: false };
+  try {
+    const saved = localStorage.getItem("botswain.vr.win." + name);
+    if (saved) { holder.matrix.fromArray(JSON.parse(saved)); holder.userData.saved = true; }
+  } catch (e) { /* no storage: default place */ }
+  scene.add(holder);
+  windows.push(holder);
+  return holder;
+}
+
+function place(win, head) {
+  // A window saved in an earlier session stays, unless that session's room origin put it far away.
+  const where = new THREE.Vector3().setFromMatrixPosition(win.matrix);
+  if (win.userData.saved && where.distanceTo(head.position) < 2.5) { win.userData.placed = true; return; }
+  // Else around where the head looks (level), turned to face the user.
+  const yaw = new THREE.Euler().setFromQuaternion(head.quaternion, "YXZ").y;
+  const pos = win.userData.offset.clone().applyQuaternion(new THREE.Quaternion().setFromEuler(new THREE.Euler(0, yaw, 0)))
+    .add(head.position);
+  const facing = Math.atan2(head.position.x - pos.x, head.position.z - pos.z);
+  win.matrix.compose(pos, new THREE.Quaternion().setFromEuler(new THREE.Euler(0, facing, 0)), new THREE.Vector3(1, 1, 1));
+  win.userData.placed = true;
+}
+
+function cameraWindow(i) {
+  const texture = new THREE.Texture();
+  texture.colorSpace = THREE.SRGBColorSpace;
+  // WebGL ignores flipY for ImageBitmaps, so camera frames came out upside down: flip the texture's v instead.
+  texture.repeat.set(1, -1);
+  texture.offset.set(0, 1);
+  const picture = new THREE.Mesh(new THREE.PlaneGeometry(0.48, 0.27), new THREE.MeshBasicMaterial({ map: texture }));
+  const win = makeWindow("cam" + i, new THREE.Vector3(i % 2 === 0 ? -0.42 : 0.42, i < 2 ? -0.15 : 0.22, -0.9),
+                         picture, 0.48, 0.27);
+  const label = card(0.48, 0.045, 1024);
+  label.position.set(0, 0.165, 0);
+  win.add(label);
+  Object.assign(win.userData, { camera: i, texture, picture, label, busy: false, last: 0 });
+  return win;
+}
+const cameraWindows = [0, 1, 2, 3].map(cameraWindow);  // as many as Botswain sends (MAX_CAMS)
+
+async function refreshCamera(win) {
+  const d = win.userData;
+  if (d.busy || performance.now() - d.last < CAM_PERIOD_MS) return;
+  d.busy = true; d.last = performance.now();
+  try {
+    const r = await fetch(`/cam/${d.camera}.jpg`, { cache: "no-store" });
+    if (r.ok) {
+      const bitmap = await createImageBitmap(await r.blob());
+      if (d.texture.image && d.texture.image.close) d.texture.image.close();
+      d.texture.image = bitmap;
+      d.texture.needsUpdate = true;
+      const aspect = (bitmap.height / bitmap.width) / (0.27 / 0.48);  // keep the camera's aspect
+      d.picture.scale.y = d.border.scale.y = aspect;
+      d.label.position.y = 0.135 * aspect + 0.03;
+    }
+  } catch (e) { /* a dropped frame: try again next period */ }
+  d.busy = false;
+}
+
+function drawCameraLabel(win, name) {
+  paint(win.userData.label, name, (c, W, H) => {
+    c.fillStyle = AMBER_CSS; c.fillRect(0, 0, W, H);
+    text(c, name.toUpperCase(), 20, H * 0.74, H * 0.62, SANS, BLACK, W * 0.7);
+    stamp(c, "live", W - 16, H / 2, H * 0.42, BLACK);
+  });
+}
+
+// Controls card: what every button does, the ones being pressed light up.
+const CONTROLS = [
+  ["RIGHT · DRIVE", [["grip", "GRIP", "hold to move the arm"], ["hand", "HAND", "X Y Z  (+ wrist tilt if ROT ON)"],
+                     ["stick", "STICK", "turn the tool (Z) while gripping"], ["trigger", "TRIGGER", "pull = close gripper"],
+                     ["ab", "A / B", "speed - / +"], ["rstick", "STICK CLICK", "wrist rotation on / off"]]],
+  ["LEFT · SET UP", [["x", "X", "dot on the tool tip: calibrate"], ["ltrigger", "HOLD TRIGGER", "grab robot, line it up, let go"],
+                     ["lstick", "STICK", "slide robot: fine-tune"],
+                     ["y", "HOLD Y", "reset calibration"], ["lgrip", "GRIP", "point at a window, drag it"]]],
+];
+const controlsCard = card(0.40, 0.47, 1024);
+const controlsWindow = makeWindow("controls", new THREE.Vector3(-0.95, -0.05, -0.55), controlsCard, 0.40, 0.47);
+const pressed = new Set();
+
+function drawControls() {
+  paint(controlsCard, [...pressed].sort().join(","), (c, W, H) => {
+    let y = frameCard(c, W, H, "CONTROLS", "DRAG: LEFT GRIP") + 20;
+    for (const [section, rows] of CONTROLS) {
+      text(c, section, 28, y + 44, 34, MONO, DIM);
+      y += 66;
+      for (const [id, key, action] of rows) {
+        const on = pressed.has(id);
+        if (on) { c.fillStyle = "rgba(255,176,0,0.22)"; c.fillRect(12, y - 4, W - 24, 66); }
+        c.lineWidth = 4; c.strokeStyle = on ? AMBER_CSS : INK; c.strokeRect(28, y + 4, 230, 50);
+        if (on) { c.fillStyle = AMBER_CSS; c.fillRect(28, y + 4, 230, 50); }
+        text(c, key, 42, y + 40, 28, MONO, on ? BLACK : INK, 202);
+        text(c, action, 284, y + 41, 34, SANS, on ? AMBER_CSS : INK, W - 312);
+        y += 70;
+      }
+      y += 14;
+    }
+  });
+}
+
+function updateWindows(head, ray, leftGrip) {
+  const names = status ? status.cams : [];
+  cameraWindows.forEach((w, i) => { w.visible = i < names.length; });
+  controlsWindow.visible = true;
+  let hovered = null;
+  if (ray) {
+    raycaster.ray.origin.setFromMatrixPosition(ray);
+    raycaster.ray.direction.set(0, 0, -1).transformDirection(ray);
+    const hit = raycaster.intersectObjects(windows.filter((w) => w.visible).map((w) => w.userData.body), false)[0];
+    hovered = hit ? windows.find((w) => w.userData.body === hit.object) : null;
+  }
+  const down = leftGrip > (leftGripDown ? CLUTCH_OFF : CLUTCH_ON);
+  if (down && !leftGripDown && hovered && ray) {
+    grabbed = { win: hovered, offset: ray.clone().invert().multiply(hovered.matrix) };
+  }
+  if (!down && grabbed) {
+    try {
+      localStorage.setItem("botswain.vr.win." + grabbed.win.userData.name, JSON.stringify(grabbed.win.matrix.toArray()));
+    } catch (e) { /* no storage: it stays put for this session only */ }
+    grabbed = null;
+  }
+  leftGripDown = down;
+  if (grabbed && ray) grabbed.win.matrix.multiplyMatrices(ray, grabbed.offset);
+  for (const w of windows) {
+    if (!w.visible) continue;
+    if (!w.userData.placed && head) place(w, head);
+    w.userData.border.material.color.setHex(grabbed && grabbed.win === w ? CYAN : w === hovered ? AMBER : WHITE);
+  }
+  cameraWindows.forEach((w, i) => {
+    if (!w.visible) return;
+    drawCameraLabel(w, names[i]);
+    refreshCamera(w);
+  });
+  drawControls();
+}
+
+// ---- left controller: tip dot (the calibration point) and its ray ----
+
+const tipDot = new THREE.Mesh(new THREE.SphereGeometry(0.008, 16, 12), new THREE.MeshBasicMaterial({ color: WHITE }));
+tipDot.matrixAutoUpdate = false;
+scene.add(tipDot);
+const rayLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]),
+                               new THREE.LineBasicMaterial({ color: WHITE, transparent: true, opacity: 0.4 }));
+tipDot.add(rayLine);
+
+// Placing: while the left trigger is held the outline is carried by the controller (upright, turning with it);
+// letting go sends the pose to the laptop. Drawn from this page while held, so it moves with zero lag.
+const placing = { held: false, grab: null, preview: null, sentMs: 0, tries: 0, nudging: false };
+
+function sendPlacement() {
+  command({ type: "calib", op: "set", matrix: placing.preview.clone().transpose().toArray() });  // row-major
+  placing.sentMs = performance.now();
+}
+
+function levelPose(ray) {
+  // The controller's pose without tilt: its position and the heading it points at. Keeps the robot upright.
+  const f = new THREE.Vector3(0, 0, -1).transformDirection(ray);
+  return new THREE.Matrix4().makeRotationY(Math.atan2(-f.x, -f.z)).setPosition(new THREE.Vector3().setFromMatrixPosition(ray));
+}
+
+function statusMatrix() { return status && status.calib.matrix ? new THREE.Matrix4().set(...status.calib.matrix) : null; }
+
+function updatePlacing(src, ray, trigger) {
+  const held = trigger > (placing.held ? CLUTCH_OFF : CLUTCH_ON);
+  if (held && !placing.held && ray) {
+    pulse(src, 0.5, 30);
+    if (!statusMatrix()) {  // nothing placed yet: start from "tool tip on the dot, base where it points"
+      const quat = new THREE.Quaternion().setFromRotationMatrix(ray);
+      command({ type: "calib", op: "place", pos: new THREE.Vector3().setFromMatrixPosition(ray).toArray(),
+             quat: quat.toArray() });
+    }
+  }
+  if (held && !placing.grab && ray) {
+    const start = placing.preview || statusMatrix();  // waits a few frames for the laptop's starting pose
+    if (start) placing.grab = levelPose(ray).invert().multiply(start);
+  }
+  if (held && placing.grab && ray) placing.preview = levelPose(ray).multiply(placing.grab);
+  if (!held && placing.held && placing.grab) {
+    sendPlacement();
+    placing.tries = 0;
+    pulse(src, 0.8, 50);
+  }
+  if (!held && !placing.nudging) {
+    placing.grab = null;
+    // Keep drawing our own pose until the laptop echoes it; no echo: send it again (a few times), never just snap
+    // back to the old placement.
+    const echoed = statusMatrix();
+    if (placing.preview && echoed && echoed.elements.every((v, i) => Math.abs(v - placing.preview.elements[i]) < 1e-3)) {
+      placing.preview = null;
+    } else if (placing.preview && performance.now() - placing.sentMs > 800) {
+      if (placing.tries < 3) { placing.tries++; sendPlacement(); } else { placing.preview = null; }
+    }
+  }
+  placing.held = held;
+}
+
+function nudgePlacement(axes, dtS, headYaw) {
+  // Left stick slides the placed robot over the floor, in the directions you look: up = away from you. For the
+  // last few centimetres the trigger drag can't reach (the real tip is under a gripper). Sent when you let go.
+  const base = placing.preview || statusMatrix();
+  const sx = axes[2] || 0, sy = axes[3] || 0, mag = Math.hypot(sx, sy);
+  if (placing.held || !base) return;
+  if (mag > NUDGE_DEADBAND) {
+    const speed = NUDGE_MAX_M_S * Math.min(mag, 1) ** 2;
+    const step = speed * dtS / mag;
+    const forward = { x: -Math.sin(headYaw), z: -Math.cos(headYaw) }, right = { x: Math.cos(headYaw), z: -Math.sin(headYaw) };
+    placing.preview = base.clone();
+    placing.preview.elements[12] += (right.x * sx - forward.x * sy) * step;  // stick up is axes[3] < 0
+    placing.preview.elements[14] += (right.z * sx - forward.z * sy) * step;
+    placing.nudging = true;
+  } else if (placing.nudging) {
+    placing.nudging = false;
+    placing.tries = 0;
+    sendPlacement();
+  }
+}
+
+let prevLeft = { x: false, y: false }, yDownMs = 0, resetSent = false;
+function leftButtons(src, ray, dtS, headYaw) {
+  const b = src && src.gamepad ? src.gamepad.buttons : [];
+  const now = { x: !!(b[4] && b[4].pressed), y: !!(b[5] && b[5].pressed) };
+  updatePlacing(src, ray, b[0] ? b[0].value : 0);
+  if (src && src.gamepad) nudgePlacement(src.gamepad.axes, dtS, headYaw);
+  if (ray && now.x && !prevLeft.x) {
+    command({ type: "calib", op: "add", pos: new THREE.Vector3().setFromMatrixPosition(ray).toArray() });
+    pulse(src, 0.6, 40);
+  }
+  if (now.y && !prevLeft.y) { yDownMs = performance.now(); resetSent = false; }
+  if (now.y && !resetSent && performance.now() - yDownMs > RESET_HOLD_MS) {
+    command({ type: "calib", op: "reset" }); resetSent = true; pulse(src, 1.0, 80);
+  }
+  prevLeft = now;
+}
+
+// ---- the frame loop ----
+
+let lastFrameMs = 0;
+let xrSession = null, clutch = false, prevAB = [false, false], rightWhy = "";
+
+function hand(frame, src, ref) {
+  // "why" is only for the wrist display; the laptop treats every untracked hand the same: it never moves the arm.
+  if (!src || !src.gripSpace || !src.gamepad) return { tracked: false, why: "no controller" };
+  const pose = frame.getPose(src.gripSpace, ref);
+  if (!pose) return { tracked: false, why: "no pose" };
+  if (pose.emulatedPosition) return { tracked: false, why: "out of view" };  // IMU-only guess: never drive the arm
   const p = pose.transform.position, q = pose.transform.orientation;
-  const b = src.gamepad.buttons, ax = src.gamepad.axes;  // xr-standard: 0 trigger, 1 grip, 4 A/X, 5 B/Y
+  const b = src.gamepad.buttons, ax = src.gamepad.axes;  // xr-standard: 0 trigger, 1 grip, 3 stick, 4 A/X, 5 B/Y
   return { tracked: true, pos: [p.x, p.y, p.z], quat: [q.x, q.y, q.z, q.w],
            trigger: b[0] ? b[0].value : 0, grip: b[1] ? b[1].value : 0,
-           a: !!(b[4] && b[4].pressed), b: !!(b[5] && b[5].pressed), stick: [ax[2] || 0, ax[3] || 0] };
+           a: !!(b[4] && b[4].pressed), b: !!(b[5] && b[5].pressed), stick: [ax[2] || 0, ax[3] || 0],
+           stick_press: !!(b[3] && b[3].pressed) };
+}
+
+function noteButtons(right, left, leftSrc) {
+  // What the controls card lights up. Left buttons are read straight from the gamepad (X / Y / stick press).
+  pressed.clear();
+  if (right.tracked) {
+    if (clutch) pressed.add("grip").add("hand");
+    if (clutch && Math.abs(right.stick[0]) > 0.2) pressed.add("stick");
+    if (right.trigger > 0.1) pressed.add("trigger");
+    if (right.a || right.b) pressed.add("ab");
+    if (right.stick_press) pressed.add("rstick");
+  }
+  const b = leftSrc && leftSrc.gamepad ? leftSrc.gamepad.buttons : [];
+  if (b[4] && b[4].pressed) pressed.add("x");
+  if (b[5] && b[5].pressed) pressed.add("y");
+  if (placing.held) pressed.add("ltrigger");
+  if (placing.nudging) pressed.add("lstick");
+  if (left.tracked && left.grip > CLUTCH_ON) pressed.add("lgrip");
+}
+
+function poseMatrix(frame, space, ref) {
+  const pose = space && frame.getPose(space, ref);
+  return pose ? new THREE.Matrix4().fromArray(pose.transform.matrix) : null;
 }
 
 function pulse(src, strength, ms) {
@@ -83,42 +641,78 @@ function pulse(src, strength, ms) {
 }
 
 function onFrame(t, frame) {
-  session.requestAnimationFrame(onFrame);
-  const layer = session.renderState.baseLayer;
-  gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
-  gl.clearColor(0, 0, 0, 0);  // transparent: passthrough shows the real room and the arm
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  // three asks for the next frame only after this returns: an exception would freeze the headset for good.
+  try { frameBody(t, frame); } catch (e) { report(e); }
+}
+
+function frameBody(t, frame) {
+  if (!frame) return;
+  const ref = renderer.xr.getReferenceSpace();
   let rightSrc = null, leftSrc = null;
-  for (const s of session.inputSources) {
+  for (const s of frame.session.inputSources) {
     if (s.handedness === "right") rightSrc = s; else if (s.handedness === "left") leftSrc = s;
   }
-  const right = hand(frame, rightSrc), left = hand(frame, leftSrc);
+  const right = hand(frame, rightSrc, ref), left = hand(frame, leftSrc, ref);
+  rightWhy = right.tracked ? "" : right.why;
   const now = right.tracked && right.grip > (clutch ? CLUTCH_OFF : CLUTCH_ON);
   if (now !== clutch) { clutch = now; pulse(rightSrc, now ? 0.5 : 0.25, now ? 30 : 15); }
-  const view = frame.getViewerPose(refSpace);
+  if (right.tracked && ((right.a && !prevAB[0]) || (right.b && !prevAB[1]))) pulse(rightSrc, 0.3, 20);
+  prevAB = right.tracked ? [right.a, right.b] : [false, false];
+  const view = frame.getViewerPose(ref);
   const head = view ? { pos: [view.transform.position.x, view.transform.position.y, view.transform.position.z],
                         quat: [view.transform.orientation.x, view.transform.orientation.y,
                                view.transform.orientation.z, view.transform.orientation.w] } : null;
-  send({ type: "vr", right: right, left: left, head: head });
+  send({ type: "vr", right, left, head });
+
+  const ray = poseMatrix(frame, leftSrc && leftSrc.targetRaySpace, ref);
+  const grip = poseMatrix(frame, leftSrc && leftSrc.gripSpace, ref);
+  const dtS = lastFrameMs ? Math.min((t - lastFrameMs) / 1000, 0.05) : 0;
+  lastFrameMs = t;
+  const headYaw = view ? new THREE.Euler().setFromQuaternion(new THREE.Quaternion(
+    view.transform.orientation.x, view.transform.orientation.y, view.transform.orientation.z,
+    view.transform.orientation.w), "YXZ").y : 0;
+  leftButtons(leftSrc, ray, dtS, headYaw);
+  tipDot.visible = !!ray;
+  if (ray) tipDot.matrix.copy(ray);
+  hudHolder.visible = !!grip;
+  if (grip) hudHolder.matrix.copy(grip);
+  drawHud();
+  noteButtons(right, left, leftSrc);
+  const warning = alertText();
+  let headPose = null;
+  if (view) {
+    const m = new THREE.Matrix4().fromArray(view.transform.matrix);
+    alertHolder.matrix.copy(m);
+    headPose = { position: new THREE.Vector3(), quaternion: new THREE.Quaternion() };
+    m.decompose(headPose.position, headPose.quaternion, new THREE.Vector3());
+  }
+  alertHolder.visible = warning !== "" && !!view;
+  if (warning) drawAlert(warning);
+  updateWindows(headPose, ray, left.tracked ? left.grip : 0);
+  applyStatus();
+  renderer.render(scene, camera);
 }
 
 async function enter() {
   try {
-    session = await navigator.xr.requestSession(enterBtn.dataset.mode, { requiredFeatures: ["local-floor"] });
+    xrSession = await navigator.xr.requestSession(enterBtn.dataset.mode, { requiredFeatures: ["local-floor"] });
   } catch (e) { say("could not start: " + e.message, "bad"); return; }
-  const canvas = document.createElement("canvas");
-  gl = canvas.getContext("webgl", { xrCompatible: true, alpha: true });
-  session.updateRenderState({ baseLayer: new XRWebGLLayer(session, gl, { alpha: true }) });
-  refSpace = await session.requestReferenceSpace("local-floor");
-  session.addEventListener("end", () => { send(released()); clutch = false; session = null;
-                                          say("left VR. Press Enter to go back in.", "ok"); });
-  session.requestAnimationFrame(onFrame);
+  await renderer.xr.setSession(xrSession);
+  command({ type: "calib", op: "reset" });  // a new session has a new room origin: the old fit no longer fits
+  xrSession.addEventListener("end", () => {
+    command(released()); clutch = false; xrSession = null; grabbed = null;
+    renderer.setAnimationLoop(null);
+    say("left VR. Press Enter to go back in.", "ok");
+  });
+  renderer.setAnimationLoop(onFrame);
   say("in VR (" + enterBtn.dataset.mode + ")", "ok");
 }
 
 enterBtn.addEventListener("click", enter);
-window.addEventListener("pagehide", () => send(released()));
+window.addEventListener("pagehide", () => command(released()));
 connect();
+check();
+loadRobot().catch((e) => console.warn("no robot outline:", e));
 </script>
 </body>
 </html>

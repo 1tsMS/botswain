@@ -1,14 +1,16 @@
 """HTTPS + websocket server that a headset or phone browser pairs with. Shared by the phone and VR pages.
 
-Pairing: a short key in the URL (`?k=KEY`, new every start, shown in the app) gets the page and an httponly
-session cookie; the websocket only opens with that cookie. After MAX_KEY_FAILURES wrong keys the server
-accepts no key at all until it is restarted. TLS uses assets/certs/{cert,key}.pem when present (per-laptop
+Pairing (phone): a short key in the URL (`?k=KEY`, new every start, shown in the app) gets the page and an
+httponly session cookie; the websocket only opens with that cookie. After MAX_KEY_FAILURES wrong keys the server
+accepts no key at all until it is restarted. require_key=False (VR) serves the page to anyone who can reach the
+port: typing a key in a headset is painful, so the VR server relies on the network (MS's own phone hotspot). TLS uses assets/certs/{cert,key}.pem when present (per-laptop
 certificate, see make_certificate), else the `teleop` package's shared one. Our own uvicorn server, so it
 stops cleanly.
 """
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -99,14 +101,22 @@ class PairedServer:
 
     on_text runs on the server's thread. on_disconnect runs when a client's websocket closes (a VR page that
     vanishes must stop the arm at once, not only after the stale timeout).
+    one_client: a new connection replaces the old one (a headset that reconnects after sleep must not wait for
+    its dead socket to time out, and two clients must never drive one session).
+    outgoing: called outgoing_hz times a second per client; a str it returns is sent to that client.
     """
 
     def __init__(self, page: str, on_text: Callable[[str], None], port: int, host: str = "0.0.0.0",
-                 path: str = "/", tab: str = "Teleop", on_disconnect: Callable[[], None] | None = None) -> None:
+                 path: str = "/", tab: str = "Teleop", on_disconnect: Callable[[], None] | None = None,
+                 require_key: bool = True, one_client: bool = False,
+                 outgoing: Callable[[], str | None] | None = None, outgoing_hz: float = 30.0) -> None:
         self.on_text = on_text
         self.on_disconnect = on_disconnect
         self.port = port
         self.path = path
+        self.require_key = require_key
+        self.one_client = one_client
+        self._active: WebSocket | None = None  # one_client: the connection that counts
         self.token = new_key()  # new pairing key every time the server starts
         self.refused = 0
         self.key_failures = 0
@@ -120,6 +130,8 @@ class PairedServer:
 
         @app.get(path)
         async def index(request: Request) -> HTMLResponse:
+            if not self.require_key:
+                return HTMLResponse(page)
             # Only someone who can read the key in the app gets the page and the session cookie.
             key = request.query_params.get("k", "").strip().upper()
             if self.key_failures >= MAX_KEY_FAILURES:
@@ -136,22 +148,34 @@ class PairedServer:
 
         @app.websocket("/ws")
         async def ws(websocket: WebSocket) -> None:
-            if not secrets.compare_digest(websocket.cookies.get(COOKIE, ""), self.token):
+            if self.require_key and not secrets.compare_digest(websocket.cookies.get(COOKIE, ""), self.token):
                 self.refused += 1
                 log.warning("%s connection refused: no valid pairing key", tab)
                 await websocket.close(code=1008)
                 return
             await websocket.accept()
+            if self.one_client and self._active is not None:
+                log.info("%s: a new connection replaces the old one", tab)
+                old, self._active = self._active, None
+                await _close_quietly(old)
+            self._active = websocket
             self.clients += 1
             log.info("%s client connected", tab)
+            sender = asyncio.create_task(_send_loop(websocket, outgoing, outgoing_hz)) if outgoing else None
             try:
                 while True:
                     text = await websocket.receive_text()
+                    if self.one_client and websocket is not self._active:
+                        break  # replaced: its last messages must not reach the session
                     self._count()
                     self.on_text(text)
-            except WebSocketDisconnect:
+            except (WebSocketDisconnect, RuntimeError):  # RuntimeError: receiving on a socket we closed
                 pass
             finally:
+                if sender is not None:
+                    sender.cancel()
+                if self._active is websocket:
+                    self._active = None
                 self.clients -= 1
                 log.info("%s client disconnected", tab)
                 if self.on_disconnect is not None:
@@ -168,7 +192,8 @@ class PairedServer:
     @property
     def urls(self) -> list[str]:
         hosts = local_ips() or ["<laptop-ip>"]
-        return [f"https://{ip}:{self.port}{self.path}?k={self.token}" for ip in hosts]
+        query = f"?k={self.token}" if self.require_key else ""
+        return [f"https://{ip}:{self.port}{self.path}{query}" for ip in hosts]
 
     def start(self, timeout_s: float = 5.0) -> None:
         self._thread.start()
@@ -192,3 +217,24 @@ class PairedServer:
         else:
             self._rate_window = (start, count + 1)
         self.messages += 1
+
+
+async def _send_loop(websocket: WebSocket, outgoing: Callable[[], str | None], hz: float) -> None:
+    period = 1.0 / hz
+    try:
+        while True:
+            text = outgoing()
+            if text is not None:
+                await websocket.send_text(text)
+            await asyncio.sleep(period)
+    except (WebSocketDisconnect, RuntimeError, OSError):
+        pass  # the receive side notices the closed socket and cleans up
+    except Exception:
+        log.exception("status sender crashed")
+
+
+async def _close_quietly(websocket: WebSocket) -> None:
+    try:
+        await websocket.close(code=4000)  # 4000: replaced by a newer connection (the page shows it)
+    except (RuntimeError, OSError):
+        pass

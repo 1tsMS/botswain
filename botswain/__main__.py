@@ -24,12 +24,22 @@ def main(argv: list[str] | None = None) -> int:
         cfg = load_robot_config(robot_path)
         tool_cfg = load_tool_config(tool_path) if tool_path else None
     except ConfigError as e:
-        print(f"Config not valid: {e}", file=sys.stderr)
+        _startup_error(f"Config not valid: {e}")
         return 2
 
     from botswain.app import run  # Qt loads only after the configs are known to be good
 
     return run(cfg, tool_cfg)
+
+
+def _startup_error(text: str) -> None:
+    """Started with pythonw (Botswain.bat) there is no console: also write it to the log file."""
+    if sys.stderr is not None:
+        print(text, file=sys.stderr)
+    log = Path(__file__).resolve().parents[1] / "logs" / "botswain.log"
+    log.parent.mkdir(exist_ok=True)
+    with log.open("a", encoding="utf-8") as f:
+        f.write(f"STARTUP ERROR {text}\n")
 
 
 if __name__ == "__main__":

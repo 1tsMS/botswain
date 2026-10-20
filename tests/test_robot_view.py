@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 from helpers import ROOT
 
-from botswain.ui.widgets.robot_view import RobotModel
+from botswain.core.robot_model import RobotModel
 
 URDF = ROOT / "assets" / "dobot_cr5" / "cr5_robot.urdf"
 

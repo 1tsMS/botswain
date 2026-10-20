@@ -77,7 +77,7 @@ def test_action_is_commanded_state_is_measured(worker):
     worker.stream(StreamTarget(far, now_ns(), "test", True))
     assert wait_for(lambda: worker.commanded.sent is not None)
     worker.submit(Gripper(False))
-    assert wait_for(lambda: worker.commanded.gripper_open is False)
+    assert wait_for(lambda: worker.commanded.gripper == 0.0)
     frame = rec.sample()
     assert frame["observation.command_raw"][0] == pytest.approx(far.x)  # input before the gate
     assert frame["action"][0] == pytest.approx(p.x + 4.5)  # what we sent after the gate

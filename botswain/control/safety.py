@@ -29,6 +29,7 @@ from botswain.core.types import (
     Drag,
     Enable,
     Gripper,
+    GripperOpening,
     JogHold,
     JogRelease,
     JogStep,
@@ -121,12 +122,14 @@ class SafetyGate:
             reason = not_ready_reason(state, frozenset({Mode.IDLE})) if cmd.on else (
                 "not connected" if state.mode is Mode.DISCONNECTED or not state.link_ok else None)
             return Rejected("ready", reason) if reason else Allowed(cmd)
-        if isinstance(cmd, Gripper | SetGripperForce):
+        if isinstance(cmd, Gripper | GripperOpening | SetGripperForce):
             # The gripper may be tested while the arm is disabled, but needs a live link.
             if state.mode is Mode.DISCONNECTED or not state.link_ok:
                 return Rejected("ready", "not connected")
             if isinstance(cmd, SetGripperForce) and not 20 <= cmd.pct <= 100:
                 return Rejected("invalid", f"gripper force must be 20..100 %, got {cmd.pct}")
+            if isinstance(cmd, GripperOpening) and not 0.0 <= cmd.opening <= 1.0:  # also refuses NaN
+                return Rejected("invalid", f"gripper opening must be 0..1, got {cmd.opening}")
             return Allowed(cmd)
         bad = _non_finite(cmd)
         if bad:

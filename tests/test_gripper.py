@@ -66,7 +66,7 @@ def test_force_waits_for_init_then_close_stops_on_the_object(bus_tool):
     assert [f[3] for f in bus.frames if f[1] == 0x06] == [0x00, 0x01, 0x03]  # init, force, then close
     assert writes_to(bus, 0x0101)[0][4:6] == [0, 40]
     assert wait_for(lambda: tool.status().text == "object caught")
-    assert tool.status().opening == pytest.approx(0.3) and tool.status().commanded_open is False
+    assert tool.status().opening == pytest.approx(0.3) and tool.status().commanded == 0.0
     tool.set_force(70)  # initialised now: written at once
     assert writes_to(bus, 0x0101)[-1][4:6] == [0, 70]
     assert tool.diagnose()[0].value.startswith("register 0x0101 = 70 %")
@@ -77,7 +77,7 @@ def test_already_initialised_gripper_is_not_initialised_again(bus_tool):
     bus.regs[0x0200] = 1  # e.g. DobotStudio did it
     assert wait_for(lambda: tool.status().text == "at position")
     tool.set_open(True)
-    assert writes_to(bus, 0x0100) == [] and tool.status().commanded_open is True
+    assert writes_to(bus, 0x0100) == [] and tool.status().commanded == 1.0
 
 
 def test_force_out_of_range_is_refused(bus_tool):

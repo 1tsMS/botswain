@@ -53,3 +53,26 @@ def test_reanchor_resets_offsets():
     m.request_reanchor()
     assert m.update((0.4, 0.0, 0.0), Q0, True, 1.0, moved) == moved  # new anchor, no jump
     assert m.update((0.4, 0.0, -0.01), Q0, True, 1.0, moved).x == pytest.approx(moved.x + 10)
+
+
+def test_tilt_only_drops_the_twist_about_the_vertical():
+    m = TeleopMapper(scale_rot=1.0, tilt_only=True)
+    m.update((0, 0, 0), Q0, True, 1.0, ROBOT)
+    twist = (np.cos(np.radians(20)), 0.0, np.sin(np.radians(20)), 0.0)  # 40 deg about WebXR y (up)
+    assert m.update((0, 0, 0), twist, True, 1.0, ROBOT).rpy == pytest.approx(ROBOT.rpy, abs=1e-6)
+    tilt = (np.cos(np.radians(10)), np.sin(np.radians(10)), 0.0, 0.0)  # 20 deg about WebXR x (right)
+    assert m.update((0, 0, 0), tilt, True, 1.0, ROBOT).rpy != pytest.approx(ROBOT.rpy, abs=1.0)
+
+
+def test_thumbstick_yaw_turns_about_base_z_and_resets_on_anchor():
+    start = Pose(-482, -136, 484, 180, 0, 30)
+    m = TeleopMapper(tilt_only=True)  # rotation following off: the stick still turns Rz
+    m.nudge_yaw(10)  # not held yet: ignored
+    m.update((0, 0, 0), Q0, True, 1.0, start)
+    m.nudge_yaw(15)
+    p = m.update((0, 0, 0), Q0, True, 1.0, start)
+    # Rz(15) on top of rpy (180, 0, 30) in fixed axes: same tool tilt, rz 45
+    assert p.rx == pytest.approx(180.0) or p.rx == pytest.approx(-180.0)
+    assert p.ry == pytest.approx(0.0, abs=1e-6) and p.rz == pytest.approx(45.0)
+    m.request_reanchor()
+    assert m.update((0, 0, 0), Q0, True, 1.0, p) == p  # the new anchor already holds the yaw: no double turn

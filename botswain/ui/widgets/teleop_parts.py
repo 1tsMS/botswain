@@ -78,6 +78,23 @@ class MappingControls(QWidget):
         grid.setColumnStretch(1, 1)
         self.facing.currentIndexChanged.connect(self._changed)
 
+    def sync_from_mapper(self) -> None:
+        """Show a scale or rotation switch changed elsewhere (the headset's buttons) without treating it as a new
+        setting."""
+        if self.mapper is None:
+            return
+        rotating = self.mapper.scale_rot > 0.0
+        if rotating != self.rotation_box.isChecked():
+            self.rotation_box.blockSignals(True)
+            self.rotation_box.setChecked(rotating)
+            self.rotation_box.blockSignals(False)
+        pct = round(self.mapper.scale_pos * 100)
+        if pct != self.scale_slider.value():
+            self.scale_slider.blockSignals(True)
+            self.scale_slider.setValue(pct)
+            self.scale_slider.blockSignals(False)
+            self.scale_value.setText(f"{self.mapper.scale_pos:.2f}")
+
     def _changed(self) -> None:
         remap = remap_about_z(self.facing.currentData())
         if self.mapper is not None:

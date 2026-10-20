@@ -1,7 +1,6 @@
 """3D robot view: URDF meshes posed by forward kinematics, plus the safety box and the target.
 
-RobotModel is the pure part (yourdfpy FK, no graphics, testable headless). RobotView draws it with
-pyvista inside Qt. The scene is in metres like the URDF; robot poses in mm are divided by 1000.
+RobotModel (botswain.core.robot_model) is the pure part; RobotView draws it with pyvista inside Qt. The scene is in metres like the URDF; robot poses in mm are divided by 1000.
 """
 
 from __future__ import annotations
@@ -12,39 +11,20 @@ from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QHBoxLayout, QLabel, QMenu, QPushButton, QVBoxLayout, QWidget
 
+from botswain.core.robot_model import RobotModel
 from botswain.core.types import Pose
 from botswain.ui.theme import C, set_role
 
 log = logging.getLogger(__name__)
 
 
-class RobotModel:
-    def __init__(self, urdf: Path) -> None:
-        import yourdfpy  # imported here so the rest of the app starts without it
-
-        self.urdf = yourdfpy.URDF.load(str(urdf), load_meshes=True, build_scene_graph=True)
-        self.joint_names = list(self.urdf.actuated_joint_names)
-        self.nodes = list(self.urdf.scene.graph.nodes_geometry)
-
-    def meshes(self) -> dict:
-        graph, geometry = self.urdf.scene.graph, self.urdf.scene.geometry
-        return {node: geometry[graph.get(node)[1]] for node in self.nodes}
-
-    def transforms(self, joints_deg: Sequence[float]) -> dict[str, np.ndarray]:
-        """World transform (4x4) of every mesh node for these joint angles."""
-        self.urdf.update_cfg(np.radians(np.asarray(joints_deg, dtype=float)))
-        graph = self.urdf.scene.graph
-        return {node: np.array(graph.get(node)[0]) for node in self.nodes}
-
-    def link_transform(self, link: str, joints_deg: Sequence[float]) -> np.ndarray:
-        self.urdf.update_cfg(np.radians(np.asarray(joints_deg, dtype=float)))
-        return np.array(self.urdf.get_transform(link))
-
-
 class RobotView(QWidget):
     box_toggled = Signal(bool)
+    corner_requested = Signal(int)  # 0 = corner 1, 1 = corner 2, -1 = add another
+    corners_cleared = Signal()
+    box_apply_requested = Signal()
 
     def __init__(self, urdf: Path | None, box_mm: tuple[tuple[float, float], ...] | None = None,
                  gripper: bool = False, box_on: bool = False, parent: QWidget | None = None) -> None:
@@ -61,7 +41,19 @@ class RobotView(QWidget):
         self.box_chip = self._chip("Safety box", chips)
         self.target_chip = self._chip("Target", chips)
         self.box_chip.setChecked(box_on)
-        self.box_chip.setToolTip("Show and enforce the workspace box from the robot YAML")
+        self.box_chip.setToolTip("Show and enforce the safety box")
+        self.box_menu_btn = set_role(QPushButton("Box ▾"), "chip")
+        self.box_menu_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.box_menu_btn.setToolTip("Teach the safety box: move the tool to its corners (jog or drag), set them, Apply")
+        self.box_menu = QMenu(self)
+        self.box_menu.addAction("Set corner 1 here", lambda: self.corner_requested.emit(0))
+        self.box_menu.addAction("Set corner 2 here", lambda: self.corner_requested.emit(1))
+        self.box_menu.addAction("Add another corner here", lambda: self.corner_requested.emit(-1))
+        self.box_menu.addSeparator()
+        self.apply_action = self.box_menu.addAction("Apply && save box", self.box_apply_requested.emit)
+        self.box_menu.addAction("Clear corners", self.corners_cleared.emit)
+        self.box_menu_btn.setMenu(self.box_menu)
+        chips.addWidget(self.box_menu_btn)
         chips.addStretch(1)
         self.reset_btn = set_role(QPushButton("Reset view"), "chip")
         self.reset_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -77,6 +69,7 @@ class RobotView(QWidget):
         self.plotter = None
         self._actors: dict = {}
         self._box_actor = None
+        self._preview_actor = None
         self._target_actor = None
         self._last_joints: np.ndarray | None = None
 
@@ -146,6 +139,20 @@ class RobotView(QWidget):
         self._box_actor = self.plotter.add_mesh(pv.Box(bounds=bounds), style="wireframe", color=C["dim"],
                                                 line_width=1.5)
         self._box_actor.SetVisibility(self.box_chip.isChecked())
+
+    def set_preview_box(self, box_mm: tuple[tuple[float, float], ...] | None) -> None:
+        """The box being taught, drawn in the selection colour until it is applied (None hides it)."""
+        if self.plotter is None:
+            return
+        import pyvista as pv
+
+        if self._preview_actor is not None:
+            self.plotter.remove_actor(self._preview_actor)
+            self._preview_actor = None
+        if box_mm is not None:
+            bounds = [v / 1000.0 for axis in box_mm for v in axis]
+            self._preview_actor = self.plotter.add_mesh(pv.Box(bounds=bounds), style="wireframe", color=C["sel"],
+                                                        line_width=2.0)
 
     def reset_view(self) -> None:
         if self.plotter is None:

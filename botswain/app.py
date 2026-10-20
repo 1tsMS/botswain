@@ -11,7 +11,14 @@ from PySide6.QtWidgets import QApplication
 
 from botswain.control.safety import SafetyGate
 from botswain.control.worker import RobotWorker
-from botswain.core.config import RobotConfig, ToolConfig
+from botswain.core.config import (
+    ConfigError,
+    RobotConfig,
+    ToolConfig,
+    load_robot_config,
+    load_tool_config,
+    write_selection,
+)
 from botswain.core.log import setup_logging
 from botswain.drivers.registry import make_driver, make_tool
 from botswain.ui import theme
@@ -49,11 +56,35 @@ def run(cfg: RobotConfig, tool_cfg: ToolConfig | None = None) -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Botswain")
     theme.apply(app)
-    worker, window = build(cfg, tool_cfg=tool_cfg)
-    tool = f", end effector {tool_cfg.name}" if tool_cfg else ", no end effector"
-    window.log_dock.append("info", f"loaded {cfg.path.name} ({cfg.name}, protocol {cfg.protocol}{tool}), "
-                                   f"log file {log_file}")
-    window.show()
+    workers: list[RobotWorker] = []
+
+    def open_window(cfg: RobotConfig, tool_cfg: ToolConfig | None, geometry=None) -> None:
+        worker, window = build(cfg, tool_cfg=tool_cfg)
+        workers.append(worker)
+        tool = f", end effector {tool_cfg.name}" if tool_cfg else ", no end effector"
+        window.log_dock.append("info", f"loaded {cfg.path.name} ({cfg.name}, protocol {cfg.protocol}{tool}), "
+                                       f"log file {log_file}")
+        window.switch_requested.connect(lambda robot, tool_path: switch(window, robot, tool_path))
+        if geometry is not None:
+            window.restoreGeometry(geometry)
+        window.show()
+
+    def switch(old: MainWindow, robot: Path, tool_path: Path | None) -> None:
+        """Load another robot / end effector in this same app: the new window opens, then the old one closes
+        (its close stops the robot, the servers and the cameras, as on exit)."""
+        try:
+            new_cfg = load_robot_config(robot)
+            new_tool = load_tool_config(tool_path) if tool_path else None
+        except ConfigError as e:
+            old.log_dock.append("error", f"cannot load: {e}")
+            return
+        write_selection(robot, tool_path)
+        open_window(new_cfg, new_tool, old.saveGeometry())  # first: closing the last window would quit the app
+        old.close()
+        old.deleteLater()
+
+    open_window(cfg, tool_cfg)
     code = app.exec()
-    worker.shutdown()
+    for worker in workers:
+        worker.shutdown()  # already stopped by each window's close; harmless twice
     return code

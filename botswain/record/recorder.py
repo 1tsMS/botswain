@@ -187,7 +187,7 @@ class Recorder:
         c = self.worker.commanded
         grip = s.gripper_pos if s.gripper_pos is not None else s.gripper  # measured when the gripper reports it
         grip_meas = grip if grip is not None else np.nan
-        grip_cmd = np.nan if c.gripper_open is None else float(c.gripper_open)
+        grip_cmd = np.nan if c.gripper is None else c.gripper
         sent = c.sent or s.tcp_target  # nothing commanded yet: the controller's own target
         raw = c.raw or sent
         frame = {

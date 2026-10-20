@@ -1,10 +1,11 @@
 """Settings page: which robot and end effector Botswain runs with, and this lab's settings for them.
 
-Left: pick a robot config and an end-effector config (or load new ones), then Save & restart. Switching is a
-restart, not a hot swap: every page is built for one robot's capabilities.
+Left: pick a robot config and an end-effector config (or add new ones), then Load. Loading builds a fresh
+window in the same app (every page is made for one robot's capabilities) and closes the old one; it is only
+allowed while disconnected.
 Right: this lab's connection, speeds and safety box for the robot that is running. They are saved to the
-config's .local.yaml overlay (the shared config file is never rewritten). The safety box can be typed in or
-taught by moving the arm (jog, drag or teleop) to opposite corners; it applies at once.
+config's .local.yaml overlay (the shared config file is never rewritten). The safety box numbers can be typed
+here; to teach it by moving the arm to its corners, use Robot view > Box on the Jog page. It applies at once.
 """
 
 from __future__ import annotations
@@ -56,16 +57,15 @@ MIN_BOX_MM = 20.0  # a box smaller than this on any axis is a typo, not a worksp
 
 class SettingsPage(QWidget):
     def __init__(self, cfg: RobotConfig, tool_cfg: ToolConfig | None, worker: RobotWorker,
-                 log: Callable[[str, str], None], restart: Callable[[Path, Path | None], None],
+                 log: Callable[[str, str], None], switch: Callable[[Path, Path | None], None],
                  apply_box: Callable[[tuple, bool], None], parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.cfg = cfg
         self.tool_cfg = tool_cfg
         self.worker = worker
         self._log = log
-        self._restart = restart
+        self._switch = switch
         self._apply_box = apply_box
-        self.corners: list[tuple[float, float, float]] = []
 
         grid = QGridLayout(self)
         grid.setContentsMargins(8, 8, 8, 8)
@@ -142,7 +142,7 @@ class SettingsPage(QWidget):
         panel = Panel("Apply")
         self.apply_note = set_role(QLabel(""), "lab")
         self.apply_note.setWordWrap(True)
-        self.restart_btn = self._button("Save && restart", "primary", self.save_and_restart)
+        self.restart_btn = self._button("Load", "primary", self.load_selected)
         panel.body_layout.addWidget(self.apply_note)
         panel.body_layout.addWidget(self.restart_btn, 0, Qt.AlignmentFlag.AlignLeft)
         return panel
@@ -213,31 +213,10 @@ class SettingsPage(QWidget):
         self.box_on.setChecked(self.cfg.limits.box_enabled)
         panel.body_layout.addWidget(self.box_on)
 
-        teach = set_role(QLabel("Teach it: move the tool to one corner of the table area (jog, drag or teleop), "
-                                "Add corner; then the opposite corner, Add corner. Fit box takes the smallest box "
-                                "around the corners plus the margin. The box limits the tool point, not the elbow."),
-                         "lab")
-        teach.setWordWrap(True)
-        panel.body_layout.addWidget(teach)
-        row = QHBoxLayout()
-        self.add_corner_btn = self._button("Add corner", "btn", self.add_corner)
-        row.addWidget(self.add_corner_btn)
-        row.addWidget(self._button("Clear corners", "btn", self.clear_corners))
-        row.addWidget(set_role(QLabel("margin"), "lab"))
-        self.margin_box = QDoubleSpinBox()
-        self.margin_box.setRange(0.0, 200.0)
-        self.margin_box.setDecimals(1)
-        self.margin_box.setSuffix(" mm")
-        row.addWidget(self.margin_box)
-        self.fit_btn = self._button("Fit box", "btn", self.fit_box)
-        row.addWidget(self.fit_btn)
-        row.addStretch(1)
-        panel.body_layout.addLayout(row)
-        self.corner_label = self._details()
-        panel.body_layout.addWidget(self.corner_label)
+        panel.body_layout.addWidget(set_role(QLabel(
+            "To teach it by moving the arm to its corners: Jog page, Robot view > Box."), "lab"))
         panel.body_layout.addWidget(self._button("Apply && save box", "primary", self.save_box), 0,
                                     Qt.AlignmentFlag.AlignLeft)
-        self._show_corners()
         return panel
 
     @staticmethod
@@ -348,14 +327,14 @@ class SettingsPage(QWidget):
         if dest is not None:
             self.fill_tools(pick=dest)
 
-    def save_and_restart(self) -> None:
+    def load_selected(self) -> None:
         r_path, _, t_path, _, problems = self.picked()
         if problems or r_path is None:
             return
         if self.worker.latest_state().mode is not Mode.DISCONNECTED:
-            self._log("warn", "disconnect first: switching robot or end effector restarts Botswain")
+            self._log("warn", "disconnect first, then Load")
             return
-        self._restart(r_path, t_path)
+        self._switch(r_path, t_path)
 
     # ---- this lab's settings (saved to the overlay) ----
 
@@ -373,7 +352,7 @@ class SettingsPage(QWidget):
                 local.write_text(before, encoding="utf-8")
             self._log("error", f"{what} not saved: {e}")
             return False
-        self._log("info", f"{what} saved to {local.name}" + (" (restart to use it)" if restart_needed else ""))
+        self._log("info", f"{what} saved to {local.name}" + (" (press Load to use it)" if restart_needed else ""))
         return True
 
     def save_connection(self) -> None:
@@ -399,35 +378,13 @@ class SettingsPage(QWidget):
         if self._save(updates, "safety box", restart_needed=False):
             self._apply_box(box, self.box_on.isChecked())
 
-    def add_corner(self) -> None:
-        s = self.worker.latest_state()
-        if not s.link_ok:
-            self._log("warn", "Add corner needs a connected robot with live feedback")
-            return
-        self.corners.append(s.tcp.xyz)
-        self._show_corners()
-
-    def clear_corners(self) -> None:
-        self.corners.clear()
-        self._show_corners()
-
-    def fit_box(self) -> None:
-        if len(self.corners) < 2:
-            return
-        m = self.margin_box.value()
-        for i, axis in enumerate(AXES):
-            lo, hi = self.box_fields[axis]
-            values = [c[i] for c in self.corners]
-            lo.setValue(min(values) - m)
-            hi.setValue(max(values) + m)
-        self._log("info", f"box fitted to {len(self.corners)} corners (+{m:g} mm); Apply & save to use it")
-
-    def _show_corners(self) -> None:
-        if not self.corners:
-            self.corner_label.setText("no corners yet")
-            return
-        self.corner_label.setText("\n".join(f"{i + 1}: X {x:.1f}  Y {y:.1f}  Z {z:.1f}"
-                                            for i, (x, y, z) in enumerate(self.corners)))
+    def save_box_values(self, box: tuple, enabled: bool) -> None:
+        """A box from elsewhere (taught in the Robot view): show it here, then the same validated save."""
+        for axis, (lo, hi) in zip(AXES, box, strict=True):
+            self.box_fields[axis][0].setValue(lo)
+            self.box_fields[axis][1].setValue(hi)
+        self.box_on.setChecked(enabled)
+        self.save_box()
 
     # ---- live state ----
 
@@ -438,17 +395,14 @@ class SettingsPage(QWidget):
             (t_path.resolve() if t_path else None) != (self.tool_cfg.path.resolve() if self.tool_cfg else None))
         if problems:
             note = "Can't use this choice: " + "; ".join(problems)
-        elif not changed:
-            note = "This is what is running now."
         elif connected:
-            note = "Disconnect first: switching robot or end effector restarts Botswain."
+            note = "Disconnect first, then Load."
+        elif not changed:
+            note = "This is what is running now. Load reloads it (picks up saved lab edits)."
         else:
-            note = "Botswain will restart with this robot and end effector."
+            note = "Load switches to this robot and end effector (a few seconds, no restart)."
         self.apply_note.setText(note)
-        self.restart_btn.setEnabled(changed and not problems and not connected)
-        live = self.worker.latest_state().link_ok
-        self.add_corner_btn.setEnabled(live)
-        self.fit_btn.setEnabled(len(self.corners) >= 2)
+        self.restart_btn.setEnabled(not problems and not connected)
 
 
 def box_limits(limits, box_mm: tuple, enabled: bool):

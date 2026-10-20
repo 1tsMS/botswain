@@ -25,7 +25,7 @@ class ToolPort(Protocol):
 
 @dataclass(frozen=True)
 class ToolStatus:
-    commanded_open: bool | None = None  # last open/close we sent, None before the first
+    commanded: float | None = None  # last opening we sent, 0 = closed .. 1 = open, None before the first
     opening: float | None = None  # measured opening 0 (closed) .. 1 (open), None if the tool does not report
     text: str = ""  # the tool's own word ("object caught", "not initialised", ...)
 
@@ -35,6 +35,7 @@ class ToolCaps:
     open_close: bool = True
     force: bool = False
     force_range_pct: tuple[int, int] = (0, 0)
+    proportional: bool = False  # takes any opening 0..1 (set_opening), not only open / close
 
 
 class Tool(ABC):
@@ -49,6 +50,12 @@ class Tool(ABC):
 
     @abstractmethod
     def set_open(self, open: bool) -> None: ...
+
+    def set_opening(self, opening: float) -> None:
+        """Jaws to this opening, 0 = closed .. 1 = open. Must not block for long: it is called at the trigger's rate."""
+        from botswain.drivers.base import DriverError
+
+        raise DriverError(-1, "this end effector only opens and closes")
 
     def set_force(self, pct: int) -> None:
         from botswain.drivers.base import DriverError

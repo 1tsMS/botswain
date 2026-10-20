@@ -29,6 +29,7 @@ from botswain.core.types import (
     Drag,
     Enable,
     Gripper,
+    GripperOpening,
     JogHold,
     JogRelease,
     JogStep,
@@ -75,7 +76,7 @@ class Commanded:
     t_ns: int = 0
     raw: Pose | None = None
     sent: Pose | None = None
-    gripper_open: bool | None = None
+    gripper: float | None = None  # commanded opening, 0 = closed .. 1 = open (open/close send 1 or 0)
     source: str = ""  # who produced the pose target: "gui" (moves, points, home), "phone", "gamepad", "vr"
 
 
@@ -263,7 +264,9 @@ class RobotWorker:
         if isinstance(cmd, MoveTo) and isinstance(cmd.target, Pose):
             self.commanded = replace(self.commanded, t_ns=now, raw=cmd.target, sent=verdict.cmd.target, source="gui")
         elif isinstance(cmd, Gripper):
-            self.commanded = replace(self.commanded, gripper_open=cmd.open)
+            self.commanded = replace(self.commanded, gripper=float(cmd.open))
+        elif isinstance(cmd, GripperOpening):
+            self.commanded = replace(self.commanded, gripper=cmd.opening)
         self._execute(verdict.cmd)
 
     def _execute(self, cmd: Command) -> None:
@@ -316,6 +319,11 @@ class RobotWorker:
                     self._log("error", "no end effector selected (Settings)")
                 else:
                     self._call("gripper", self.tool.set_open, is_open)
+            case GripperOpening(opening=opening):
+                if self.tool is None:
+                    self._log("error", "no end effector selected (Settings)")
+                else:
+                    self._call("gripper", self.tool.set_opening, opening)
             case Drag(on=on):
                 if self._call("drag", d.drag, on):
                     self._log("info", "drag mode ON: guide the arm by hand" if on else "drag mode off")
@@ -431,8 +439,7 @@ class RobotWorker:
             state = replace(self.latest_state(), link_ok=False, feedback_hz=0.0)
         if self.tool is not None and self._connected:
             t = self.tool.status()
-            grip = None if t.commanded_open is None else float(t.commanded_open)
-            state = replace(state, gripper=grip, gripper_pos=t.opening, gripper_status=t.text)
+            state = replace(state, gripper=t.commanded, gripper_pos=t.opening, gripper_status=t.text)
         with self._state_lock:
             self._state = state
         return state

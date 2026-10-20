@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import QComboBox, QGridLayout, QHBoxLayout, QLabel, QPushButton, QSpinBox, QWidget
 
+from botswain.control.box_teach import box_from_corners, flat_axes
 from botswain.control.safety import not_ready_reason
 from botswain.core.config import RobotConfig
 from botswain.core.types import (
@@ -41,6 +42,7 @@ TICK_MS = 50  # "still held" heartbeat; the worker releases the jog after 150 ms
 
 
 class JogPage(QWidget):
+    box_taught = Signal(object)  # the box from the taught corners, to apply and save
     def __init__(self, cfg: RobotConfig, caps: Capabilities, submit: Callable[[Command], None],
                  log: Callable[[str, str], None], view_3d: bool = True, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -73,6 +75,7 @@ class JogPage(QWidget):
         self.orientation.body_layout.addLayout(frame_row)
         self.pose_fields = PoseFields(caps.dof)
         self.pose_fields.set_limits(cfg.limits.joints_deg, cfg.limits.box_mm)
+        self.pose_fields_joint_limits = cfg.limits.joints_deg
         self.orientation.body_layout.addWidget(self.pose_fields)
         self.orientation.body_layout.addStretch(1)
         buttons = QHBoxLayout()
@@ -135,6 +138,11 @@ class JogPage(QWidget):
                                     box_on=cfg.limits.box_enabled)
         self.view.body_layout.setContentsMargins(6, 6, 6, 6)
         self.view.body_layout.addWidget(self.robot_view, 1)
+        self.current_box = cfg.limits.box_mm  # the box in use (Settings or a taught one may replace it)
+        self.box_corners: list[tuple[float, float, float]] = []
+        self.robot_view.corner_requested.connect(self._set_corner)
+        self.robot_view.corners_cleared.connect(self._clear_corners)
+        self.robot_view.box_apply_requested.connect(self._apply_corners)
 
         self._hold_timer = QTimer(self)
         self._hold_timer.setInterval(TICK_MS)
@@ -207,6 +215,51 @@ class JogPage(QWidget):
         if self._has_force and self._force_sent != self.force_box.value():
             self._send_force(self.force_box.value())  # the box shows 50 % from the start: make that true
         self._submit(Gripper(False))
+
+    # ---- teaching the safety box (Robot view > Box) ----
+
+    def _set_corner(self, index: int) -> None:
+        if self._state is None or not self._state.link_ok:
+            self._log("warn", "Box: needs a connected robot with live feedback")
+            return
+        tcp = self._state.tcp.xyz
+        if index < 0 or index >= len(self.box_corners):
+            self.box_corners.append(tcp)
+        else:
+            self.box_corners[index] = tcp
+        n = len(self.box_corners)
+        self._log("info", f"Box corner {n if index < 0 else index + 1} at X {tcp[0]:.1f} Y {tcp[1]:.1f} "
+                          f"Z {tcp[2]:.1f} ({n} corner{'s' if n != 1 else ''})")
+        self._preview()
+
+    def _clear_corners(self) -> None:
+        self.box_corners.clear()
+        self.robot_view.set_preview_box(None)
+        self._log("info", "Box corners cleared")
+
+    def _preview(self) -> None:
+        if len(self.box_corners) < 2:
+            return
+        box = box_from_corners(self.box_corners, self.current_box)
+        self.robot_view.set_preview_box(box)
+        flat = flat_axes(self.box_corners)
+        size = " x ".join(f"{hi - lo:.0f}" for lo, hi in box)
+        note = f"; {', '.join(a.upper() for a in flat)} kept from the current box" if flat else ""
+        self._log("info", f"Box preview {size} mm{note}. Box > Apply & save to use it")
+
+    def _apply_corners(self) -> None:
+        if len(self.box_corners) < 2:
+            self._log("warn", "Box: set at least two corners first")
+            return
+        self.box_taught.emit(box_from_corners(self.box_corners, self.current_box))
+
+    def show_box(self, box_mm: tuple) -> None:
+        """A new box is in use (taught here or typed in Settings)."""
+        self.current_box = box_mm
+        self.box_corners.clear()
+        self.robot_view.set_preview_box(None)
+        self.robot_view.set_box(box_mm)
+        self.pose_fields.set_limits(self.pose_fields_joint_limits, box_mm)
 
     def _go_home(self) -> None:
         if self._home is not None:

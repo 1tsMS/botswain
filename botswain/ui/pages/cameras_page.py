@@ -1,4 +1,5 @@
-"""Cameras page: scan for USB cameras, pick one (or all) from the dropdown, show it here and in the dock."""
+"""Cameras page: scan for USB cameras, pick one from the dropdown and Show it; Show again to add more (or pick
+All sources). Stop stops them all. Every running camera shows here, in the dock, in VR and in recordings."""
 
 from __future__ import annotations
 
@@ -41,7 +42,8 @@ class CamerasPage(QWidget):
             row.addWidget(w)
         row.addStretch(1)
         panel.body_layout.addLayout(row)
-        self.grid = CameraGrid("No camera running. Plug it in, press Scan, pick it, press Show.")
+        self.grid = CameraGrid("No camera running. Plug it in, press Scan, pick it, press Show. "
+                               "Pick another and Show again to add it.")
         panel.body_layout.addWidget(self.grid, 1)
         lay.addWidget(panel)
         self.show_btn.setEnabled(False)
@@ -83,10 +85,15 @@ class CamerasPage(QWidget):
         choice = self.choice.currentData()
         if choice is None:
             return
-        self.stop_all()
         indexes = [self.choice.itemData(i) for i in range(self.choice.count())
                    if self.choice.itemData(i) not in (None, ALL)] if choice == ALL else [choice]
+        running = {cam.index for cam in self.cameras}
+        if all(i in running for i in indexes):
+            self._log("info", "that camera is already running")
+            return
         for i in indexes:
+            if i in running:
+                continue  # adds to what runs; Stop stops them all
             cam = CameraThread(i, self._names.get(i, f"cam {i}"))
             cam.start()  # opens on its own thread; a failure shows on the tile
             self.cameras.append(cam)

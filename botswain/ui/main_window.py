@@ -3,18 +3,17 @@
 from __future__ import annotations
 
 import logging
-import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, QProcess, Qt
+from PySide6.QtCore import QEvent, QObject, Qt, Signal
 from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QMainWindow, QScrollArea, QStackedWidget, QWidget
 
 from botswain.control.points import PointStore
 from botswain.control.program import ProgramRunner
 from botswain.control.worker import RobotWorker
-from botswain.core.config import ROOT, RobotConfig, ToolConfig, write_selection
+from botswain.core.config import RobotConfig, ToolConfig
 from botswain.core.log import LEVELS
 from botswain.core.types import (
     ClearError,
@@ -75,6 +74,8 @@ class StopKeyFilter(QObject):
 
 
 class MainWindow(QMainWindow):
+    switch_requested = Signal(object, object)  # robot config path, tool config path or None
+
     def __init__(self, cfg: RobotConfig, worker: RobotWorker, bridge: QObject, view_3d: bool = True,
                  parent: QWidget | None = None, tool_cfg: ToolConfig | None = None) -> None:
         super().__init__(parent)
@@ -98,11 +99,16 @@ class MainWindow(QMainWindow):
         home = cfg.home_joints_deg if cfg.home_confirmed else None
         self.runner = ProgramRunner(worker, self.points, home, log_cb=self._log)
         self.points_page = PointsTable(self.points, cfg, self.runner, self._submit, self._log, save=self._save_point)
-        self.teleop_page = TeleopPage(worker, self._log)
+        self.teleop_page = TeleopPage(worker, self._log, urdf=cfg.model_urdf,
+                                      tool_offset_mm=tool_cfg.tcp_offset_mm if tool_cfg else None,
+                                      cameras=lambda: self.cameras_page.cameras)
         self.cameras_page = CamerasPage(self._log)
         self.blocks_page = BlocksPage(self.runner, lambda: [p.name for p in self.points.all()], self._log)
-        self.settings_page = SettingsPage(cfg, tool_cfg, worker, self._log, restart=self._restart,
+        self.settings_page = SettingsPage(cfg, tool_cfg, worker, self._log, switch=self._switch,
                                           apply_box=self._apply_box)
+        # A box taught in the Robot view goes through the same validated save as one typed in Settings.
+        # Teaching a box means wanting it enforced, so it is switched on.
+        self.jog_page.box_taught.connect(lambda box: self.settings_page.save_box_values(box, enabled=True))
         self.pages: dict[str, QWidget] = {}
         self._stack_items: dict[str, QWidget] = {}
         self.jog_page.setMinimumSize(1000, 520)  # below this the page scrolls instead of squashing
@@ -205,20 +211,16 @@ class MainWindow(QMainWindow):
         return area
 
     def _apply_box(self, box_mm: tuple, enabled: bool) -> None:
-        """A safety box taught or typed in Settings: the gate uses it at once, the views show it."""
+        """A safety box saved in Settings (typed, or taught in the Robot view): the gate uses it at once."""
         self.worker.gate.limits = box_limits(self.worker.gate.limits, box_mm, enabled)
-        view = self.jog_page.robot_view
-        view.set_box(box_mm)
-        view.box_chip.setChecked(enabled)  # also switches the gate (box_toggled)
+        self.jog_page.show_box(box_mm)
+        self.jog_page.robot_view.box_chip.setChecked(enabled)  # also switches the gate (box_toggled)
         self.status.set_box(box_mm)
-        self.jog_page.pose_fields.set_limits(self.cfg.limits.joints_deg, box_mm)
 
-    def _restart(self, robot: Path, tool: Path | None) -> None:
-        """Switch robot / end effector: remember the choice, start a fresh Botswain, close this one."""
-        write_selection(robot, tool)
-        self._log("info", f"restarting with {robot.name}" + (f" and {tool.name}" if tool else ""))
-        QProcess.startDetached(sys.executable, ["-m", "botswain"], str(ROOT))
-        self.close()
+    def _switch(self, robot: Path, tool: Path | None) -> None:
+        """Load another robot / end effector: app.py builds the new window in this same app, then closes this one."""
+        self._log("info", f"loading {robot.name}" + (f" with {tool.name}" if tool else " without an end effector"))
+        self.switch_requested.emit(robot, tool)
 
     def _box_toggled(self, on: bool) -> None:
         self.worker.gate.box_enabled = on

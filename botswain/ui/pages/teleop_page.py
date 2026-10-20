@@ -4,7 +4,8 @@ worker and safety gate; only one moves the arm at a time (the worker's stream ow
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
@@ -42,8 +43,17 @@ PAD_KEYS = [("LB (hold)", "move the arm (let go = stop)"), ("Left stick", "X / Y
             ("D-pad up / down", "speed +/- 10 %"), ("Start", "recording: start, or save the episode"),
             ("Back", "discard the episode"), ("X", "save the current pose as a point")]
 VR_KEYS = [("Right grip (squeeze)", "clutch: hold to move; let go, move your hand, squeeze again to re-centre"),
-           ("Right trigger", "gripper open / close"),
-           ("Lost tracking / page closed", "the arm stops at once")]
+           ("Right hand", "X Y Z, and the wrist's tilt about X / Y when rotation following is on"),
+           ("Right stick left / right", "turn the tool about Z (while the grip is held)"),
+           ("Right trigger", "gripper: pull to close, let go to open (proportional)"),
+           ("A / B", "motion scale - / + 10 %"),
+           ("Right stick click", "wrist rotation following on / off (the checkbox above follows it)"),
+           ("Left X", "calibrate: tip of the left controller on the tool tip, press X (2 or more points)"),
+           ("Left trigger (hold)", "place the robot: dot on the tool tip, aim at the base, line it up, let go"),
+           ("Left stick", "after placing: slide the robot to fine-tune it (up = away from you)"),
+           ("Left Y (hold 1 s)", "reset the calibration"),
+           ("Left grip on a camera window", "move the window (it stays there next time)"),
+           ("Lost tracking / page closed", "the arm stops at once; let go of the grip once after a reconnect")]
 
 
 def _button(text: str, role: str, slot) -> QPushButton:
@@ -86,15 +96,20 @@ def _two_columns(left: list[QWidget], right: list[QWidget]) -> QWidget:
 
 
 class TeleopPage(QWidget):
-    def __init__(self, worker: RobotWorker, log: Callable[[str, str], None], parent: QWidget | None = None) -> None:
+    def __init__(self, worker: RobotWorker, log: Callable[[str, str], None], parent: QWidget | None = None,
+                 urdf: Path | None = None, tool_offset_mm: Sequence[float] | None = None,
+                 cameras: Callable[[], list] = list) -> None:
         super().__init__(parent)
         self.worker = worker
         self._log = log
+        self._urdf = urdf  # the headset draws the robot's outline from it
+        self._tool_offset_mm = tool_offset_mm
+        self._cameras = cameras
         self.server: PhoneServer | None = None
         self.mapper = TeleopMapper(scale_pos=0.3, scale_rot=0.0)
         self.session = TeleopSession(worker, self.mapper)
         self.vr_server: VrServer | None = None
-        self.vr_mapper = TeleopMapper(scale_pos=0.5, scale_rot=0.0)
+        self.vr_mapper = TeleopMapper(scale_pos=0.5, scale_rot=0.0, tilt_only=True)
         self.vr_session = VrSession(worker, self.vr_mapper)
 
         lay = QVBoxLayout(self)
@@ -221,27 +236,30 @@ class TeleopPage(QWidget):
         headset = Panel("VR headset (WebXR)", f"Meta Quest Browser · HTTPS port {VR_PORT}")
         self.vr_btn = _button("Start VR server", "primary", self.toggle_vr)
         headset.body_layout.addLayout(_row(self.vr_btn))
-        self.vr_link = PairingLink()
+        self.vr_link = PairingLink(big_address=True)  # readable through the passthrough
         headset.body_layout.addWidget(self.vr_link)
         self.vr_status = set_role(QLabel(""), "lab")
         headset.body_layout.addWidget(self.vr_status)
         headset.body_layout.addWidget(_note(
-            "1. Windows Settings > Network > Mobile hotspot: on (no internet needed). 2. Quest: join that Wi-Fi, "
-            "open Meta Quest Browser, go to the https address above and type the key. 3. Accept the certificate "
-            f"warning, press Enter. Windows Firewall must allow inbound TCP {VR_PORT}."))
+            "1. Laptop and Quest on your phone's hotspot. On the laptop set that Wi-Fi's network profile to Private "
+            f"(the firewall rule for TCP {VR_PORT} is Private only). 2. Quest: Meta Quest Browser, type the address "
+            "above with https://. 3. First time only: accept the certificate warning. 4. Press Enter. No key: "
+            "anyone on that hotspot can open the page, so keep the hotspot to yourself."))
         hand = Panel("Right hand", "live")
         self.hand_label = QLabel("no headset")
         self.hand_label.setFont(mono_font(14))
         hand.body_layout.addWidget(self.hand_label)
         mapping = Panel("Mapping", "first runs: small and slow")
-        mapping.body_layout.addWidget(MappingControls(self.vr_mapper, scale_pct=50, what="hand"))
-        controls = Panel("Controls", "right controller")
+        self.vr_mapping = MappingControls(self.vr_mapper, scale_pct=50, what="hand")
+        mapping.body_layout.addWidget(self.vr_mapping)
+        controls = Panel("Controls", "right hand drives, left hand sets up")
         controls.body_layout.addWidget(key_table(VR_KEYS))
         return _two_columns([headset, hand], [mapping, controls])
 
     def toggle_vr(self) -> None:
         if self.vr_server is None:
-            server = VrServer(self.vr_session)
+            server = VrServer(self.vr_session, urdf=self._urdf, tool_offset_mm=self._tool_offset_mm,
+                              cameras=self._cameras)
             try:
                 server.start()
             except RuntimeError as e:
@@ -288,7 +306,12 @@ class TeleopPage(QWidget):
         vr = self.vr_server is not None
         self.vr_btn.setText("Stop VR server" if vr else "Start VR server")
         self.vr_status.setText(f"headsets connected: {self.vr_server.clients} · {self.vr_server.hz:.0f} Hz · "
-                               f"bad messages {self.vr_server.bad_messages}" if vr else "")
+                               f"bad messages {self.vr_server.bad_messages} · "
+                               f"calibration: {self.vr_server.calibration.note}" if vr else "")
+        self.vr_mapping.sync_from_mapper()
+        placed = self.vr_session.room_remap is not None  # directions follow the robot's placement in the headset
+        self.vr_mapping.facing.setEnabled(not placed)
+        self.vr_mapping.facing.setToolTip("Set by the headset calibration (reset it with left Y)" if placed else "")
         self.hand_label.setText(hand_text(self.vr_session, vr and self.vr_server.clients > 0))
 
         owner = self.worker.stream_owner
@@ -304,5 +327,7 @@ def hand_text(session: VrSession, connected: bool) -> str:
     if s.right is None:
         return "right controller NOT tracked (arm held)"
     h = s.right
-    state = "clutch HELD" if session.clutch else "clutch released"
-    return f"{state}\ngrip {h.grip * 100:3.0f} %   trigger {h.trigger * 100:3.0f} %"
+    state = "clutch HELD" if session.clutch else "let go of the grip once" if session.need_release else "clutch released"
+    return (f"{state}\ngrip {h.grip * 100:3.0f} %   trigger {h.trigger * 100:3.0f} %   stick {h.stick[0]:+.1f}\n"
+            f"motion scale {session.scale_pct} %   directions: "
+            f"{'from the robot placement' if session.room_remap is not None else 'Hand forward setting'}")

@@ -1,29 +1,35 @@
-import pytest
-from helpers import dobot_cfg, wait_for
+"""The DH gripper as its own end-effector driver: Modbus frames, the tool driver on a pretend bus, the full path
+through a Dobot's RS485 tool port (HTTP 22000), and the worker that owns it."""
 
+import pytest
+from helpers import ROBOTS, dh_tool, dobot_cfg, wait_for
+
+from botswain.control.safety import SafetyGate
+from botswain.control.worker import RobotWorker
+from botswain.core.config import load_robot_config
+from botswain.core.types import Connect, Gripper, Mode, SetGripperForce
 from botswain.drivers.base import DriverError
-from botswain.drivers.dobot.driver import DobotDriver
+from botswain.drivers.dobot.driver import DobotV3Driver
 from botswain.drivers.dobot.fake_controller import FakeDobotController
-from botswain.drivers.dobot.gripper import crc16_modbus, write_register_frame
+from botswain.drivers.fake import FakeDriver
+from botswain.tools.dh_modbus import (
+    crc16_modbus,
+    parse_read_reply,
+    read_register_frame,
+    write_register_frame,
+)
+from botswain.tools.fake_dh import FakeDhBus
+
+# ---- frames ----
 
 
 def test_crc_matches_phone2act():
     assert write_register_frame(1, 0x0103, 0) == [1, 6, 1, 3, 0, 0, 120, 54]  # close
     assert write_register_frame(1, 0x0103, 1000) == [1, 6, 1, 3, 3, 232, 120, 136]  # open
-
-
-def test_init_frame():
-    assert write_register_frame(1, 0x0100, 1) == [1, 6, 1, 0, 0, 1, 73, 246]
-
-
-def test_crc_of_frame_with_crc_is_zero():
-    frame = write_register_frame(1, 0x0103, 500)
-    assert crc16_modbus(bytes(frame)) == 0
+    assert write_register_frame(1, 0x0100, 1) == [1, 6, 1, 0, 0, 1, 73, 246]  # init
 
 
 def test_read_frame_and_reply():
-    from botswain.drivers.dobot.gripper import parse_read_reply, read_register_frame
-
     frame = read_register_frame(1, 0x0201)
     assert frame[:6] == [1, 3, 2, 1, 0, 1] and crc16_modbus(bytes(frame)) == 0
     body = [1, 3, 2, 0x01, 0x2C]  # 300
@@ -34,47 +40,127 @@ def test_read_frame_and_reply():
     assert parse_read_reply([2, *body[1:], crc & 0xFF, crc >> 8], 1) is None  # other slave
 
 
+# ---- the tool driver on a pretend bus ----
+
+
+def writes_to(bus, reg):
+    return [f for f in bus.frames if f[1] == 0x06 and (f[2] << 8 | f[3]) == reg]
+
+
 @pytest.fixture
-def dobot():
-    ctrl = FakeDobotController()
-    ctrl.start()
-    d = DobotDriver(dobot_cfg(ctrl))
-    d.connect()
-    yield ctrl, d
-    d.disconnect()
-    ctrl.stop()
+def bus_tool():
+    bus, tool = FakeDhBus(), dh_tool()
+    tool.connect(bus)
+    yield bus, tool
+    tool.disconnect()
 
 
-def frames_to(ctrl, reg):
-    return [f for f in ctrl.gripper_frames if f[1] == 0x06 and (f[2] << 8 | f[3]) == reg]
+def test_force_waits_for_init_then_close_stops_on_the_object(bus_tool):
+    bus, tool = bus_tool
+    assert wait_for(lambda: tool.status().text.startswith("not initialised"))
+    assert writes_to(bus, 0x0100) == []  # the readout never initialises (init moves the jaws)
+    tool.set_force(40)
+    assert writes_to(bus, 0x0101) == []  # not initialised yet: kept for the first close
+    bus.object_permille = 300
+    tool.set_open(False)
+    assert [f[3] for f in bus.frames if f[1] == 0x06] == [0x00, 0x01, 0x03]  # init, force, then close
+    assert writes_to(bus, 0x0101)[0][4:6] == [0, 40]
+    assert wait_for(lambda: tool.status().text == "object caught")
+    assert tool.status().opening == pytest.approx(0.3) and tool.status().commanded_open is False
+    tool.set_force(70)  # initialised now: written at once
+    assert writes_to(bus, 0x0101)[-1][4:6] == [0, 70]
+    assert tool.diagnose()[0].value.startswith("register 0x0101 = 70 %")
 
 
-def test_force_waits_for_init_then_close_stops_on_the_object(dobot):
-    ctrl, d = dobot
-    assert wait_for(lambda: d.read_state().gripper_status.startswith("not initialised"))
-    assert frames_to(ctrl, 0x0100) == []  # the readout never initialises (init moves the jaws)
-    d.set_gripper_force(40)
-    assert frames_to(ctrl, 0x0101) == []  # not initialised yet: kept for the first close
-    ctrl.gripper_object_permille = 300
-    d.gripper(False)
-    order = [f[3] for f in ctrl.gripper_frames if f[1] == 0x06]
-    assert order == [0x00, 0x01, 0x03]  # init, force, then close
-    assert frames_to(ctrl, 0x0101)[0][4:6] == [0, 40]
-    assert wait_for(lambda: d.read_state().gripper_status == "object caught")
-    assert d.read_state().gripper_pos == pytest.approx(0.3)
-    d.set_gripper_force(70)  # initialised now: written at once
-    assert frames_to(ctrl, 0x0101)[-1][4:6] == [0, 70]
+def test_already_initialised_gripper_is_not_initialised_again(bus_tool):
+    bus, tool = bus_tool
+    bus.regs[0x0200] = 1  # e.g. DobotStudio did it
+    assert wait_for(lambda: tool.status().text == "at position")
+    tool.set_open(True)
+    assert writes_to(bus, 0x0100) == [] and tool.status().commanded_open is True
 
 
-def test_already_initialised_gripper_is_not_initialised_again(dobot):
-    ctrl, d = dobot
-    ctrl.gripper_regs[0x0200] = 1  # e.g. DobotStudio did it
-    assert wait_for(lambda: d.read_state().gripper_status == "at position")
-    d.gripper(True)
-    assert frames_to(ctrl, 0x0100) == [] and d.read_state().gripper == 1.0
-
-
-def test_force_out_of_range_is_refused(dobot):
-    _, d = dobot
+def test_force_out_of_range_is_refused(bus_tool):
+    _, tool = bus_tool
     with pytest.raises(DriverError):
-        d.set_gripper_force(10)
+        tool.set_force(10)
+
+
+def test_silent_bus_reads_as_no_reading():
+    class Silent:
+        kind = "rs485"
+
+        def exchange(self, frame):
+            return []
+
+    tool = dh_tool()
+    tool.connect(Silent())
+    try:
+        assert wait_for(lambda: tool.status().text == "no reading")
+    finally:
+        tool.disconnect()
+
+
+# ---- through a Dobot's tool port ----
+
+
+def test_gripper_through_the_dobot_tool_port():
+    ctrl = FakeDobotController()
+    ctrl.v3 = True
+    ctrl.start()
+    d = DobotV3Driver(dobot_cfg(ctrl))
+    tool = dh_tool()
+    try:
+        d.connect()
+        port = d.tool_port()
+        assert port is not None and port.kind == "rs485"
+        tool.connect(port)
+        tool.set_open(True)
+        tool.set_open(False)
+        writes = [f for f in ctrl.tool_bus.frames if f[1] == 0x06]  # reads (03) are the status poll
+        assert writes == [[1, 6, 1, 0, 0, 1, 73, 246], [1, 6, 1, 3, 3, 232, 120, 136], [1, 6, 1, 3, 0, 0, 120, 54]]
+        assert wait_for(lambda: tool.status().opening == 0.0)
+    finally:
+        tool.disconnect()
+        d.disconnect()
+        ctrl.stop()
+
+
+# ---- owned by the worker ----
+
+
+@pytest.fixture
+def worker():
+    cfg = load_robot_config(ROBOTS / "fake.yaml")
+    w = RobotWorker(FakeDriver(cfg), SafetyGate(cfg.limits, cfg.stream.period_s), tool=dh_tool())
+    w.start()
+    w.submit(Connect())
+    assert wait_for(lambda: w.latest_state().mode is Mode.DISABLED)
+    yield w
+    w.shutdown()
+
+
+def test_worker_routes_gripper_commands_and_merges_status(worker):
+    assert worker.capabilities.gripper and worker.capabilities.gripper_force
+    assert not worker.driver.capabilities.gripper  # the arm itself has no gripper
+    worker.submit(SetGripperForce(60))
+    worker.submit(Gripper(False))
+    assert wait_for(lambda: worker.latest_state().gripper == 0.0)
+    assert wait_for(lambda: worker.latest_state().gripper_status == "at position")
+    assert writes_to(worker.driver.tool_bus, 0x0101)[-1][4:6] == [0, 60]
+
+
+def test_worker_without_end_effector_says_so():
+    cfg = load_robot_config(ROBOTS / "fake.yaml")
+    w = RobotWorker(FakeDriver(cfg), SafetyGate(cfg.limits, cfg.stream.period_s))
+    logs = []
+    w.on_log = lambda level, text: logs.append(text)
+    w.start()
+    try:
+        w.submit(Connect())
+        assert wait_for(lambda: w.latest_state().mode is Mode.DISABLED)
+        assert not w.capabilities.gripper
+        w.submit(Gripper(True))
+        assert wait_for(lambda: any("no end effector" in t for t in logs))
+    finally:
+        w.shutdown()

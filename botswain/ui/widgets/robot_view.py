@@ -134,6 +134,19 @@ class RobotView(QWidget):
         self.reset_view()
         lay.addWidget(self.plotter, 1)
 
+    def set_box(self, box_mm: tuple[tuple[float, float], ...]) -> None:
+        """Redraw the safety box (after it was taught or edited in Settings)."""
+        if self.plotter is None:
+            return
+        import pyvista as pv
+
+        if self._box_actor is not None:
+            self.plotter.remove_actor(self._box_actor)
+        bounds = [v / 1000.0 for axis in box_mm for v in axis]
+        self._box_actor = self.plotter.add_mesh(pv.Box(bounds=bounds), style="wireframe", color=C["dim"],
+                                                line_width=1.5)
+        self._box_actor.SetVisibility(self.box_chip.isChecked())
+
     def reset_view(self) -> None:
         if self.plotter is None:
             return

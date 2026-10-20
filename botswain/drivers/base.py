@@ -88,17 +88,21 @@ class Driver(ABC):
     def stream_target(self, pose: Pose) -> None:
         raise DriverError(-1, "streaming not supported by this driver")
 
-    def gripper(self, open: bool) -> None:
-        raise DriverError(-1, "no gripper on this driver")
-
-    def set_gripper_force(self, pct: int) -> None:
-        raise DriverError(-1, "this gripper has no force setting")
+    def tool_port(self):
+        """How bytes reach an end effector on this arm (a botswain.tools.base.ToolPort), or None if the arm
+        offers none. End effectors are their own drivers; the arm only carries the bytes."""
+        return
 
     def drag(self, on: bool) -> None:
         raise DriverError(-1, "this robot has no drag (hand-guiding) mode")
 
     def request_control(self) -> None:
         raise DriverError(-1, "this robot has no 'take control' command")
+
+    @classmethod
+    def offline_checks(cls, cfg) -> list[Check]:
+        """Checks that need no connection (the Doctor before Connect). Short own connections only."""
+        return []
 
     def diagnose(self) -> list[Check]:
         """Driver-specific Doctor checks (ports, packet rate...)."""

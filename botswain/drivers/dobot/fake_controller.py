@@ -1,7 +1,7 @@
 """A pretend Dobot V4 controller on localhost, so the real DobotDriver can be tested end to end at home.
 
 Speaks the real protocol: dashboard replies `ErrorID,{values},Cmd(...);` with real error codes, 1440-byte
-feedback packets every 8 ms, and the HTTP gripper endpoint. Joints and pose are not linked (no IK).
+feedback packets every 8 ms, and the HTTP tool-port endpoint (a pretend DH gripper). Joints and pose are not linked (no IK).
 Test switches: split_packets, garbage_every, tcp_mode, feedback_paused, inject_alarm(code).
 
     python -m botswain.drivers.dobot.fake_controller      # 29999, 30003, 30004, 22000 on 127.0.0.1
@@ -21,8 +21,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 
 from botswain.drivers.dobot.feedback import build_packet
-from botswain.drivers.dobot.gripper import crc16_modbus
 from botswain.drivers.fake import step_toward
+from botswain.tools.fake_dh import FakeDhBus
 
 log = logging.getLogger(__name__)
 
@@ -80,9 +80,7 @@ class FakeDobotController:
         self.silent = False  # the dashboard swallows commands without answering until a new connection
         self.v3 = False  # behave like a V3 controller (3.5.x, the lab CR5): positional syntax, V3 mode codes
         self.commands: list[str] = []
-        self.gripper_frames: list[list[int]] = []
-        self.gripper_regs: dict[int, int] = {0x0200: 0, 0x0201: 1, 0x0202: 1000}  # DH registers, not initialised
-        self.gripper_object_permille: int | None = None  # set: a close stops here with "object caught"
+        self.tool_bus = FakeDhBus()  # a pretend DH gripper on the tool RS485 port (HTTP 22000)
 
         self._lock = threading.RLock()
         self._stop = threading.Event()
@@ -239,27 +237,6 @@ class FakeDobotController:
                     self._feedback_clients.remove(conn)
 
     # ---- the robot ----
-
-    def gripper_modbus(self, frame: list[int]) -> list[int]:
-        """A DH gripper on the tool port: write (06) echoes and sets the register, read (03) answers it.
-        A close stops at a 'caught object' (gripper_object_permille) and reports grip state 2."""
-        reg, value = (frame[2] << 8) | frame[3], (frame[4] << 8) | frame[5]
-        if frame[1] == 0x06:
-            self.gripper_regs[reg] = value
-            if reg == 0x0100:
-                self.gripper_regs[0x0200] = 1
-            if reg == 0x0103:
-                obj = self.gripper_object_permille
-                caught = obj is not None and value < obj
-                self.gripper_regs[0x0202] = obj if caught else value
-                self.gripper_regs[0x0201] = 2 if caught else 1
-            return frame
-        if frame[1] == 0x03:
-            v = self.gripper_regs.get(reg, 0)
-            body = [frame[0], 0x03, 2, v >> 8, v & 0xFF]
-            crc = crc16_modbus(bytes(body))
-            return [*body, crc & 0xFF, crc >> 8]
-        return []
 
     def _packet(self) -> bytes:
         tcp_target = self.tcp if self.jog else self.tcp_target
@@ -458,11 +435,8 @@ class FakeDobotController:
                     return
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
                 frame = list(body.get("value", []))
-                crc_ok = len(frame) >= 3 and crc16_modbus(bytes(frame[:-2])) == frame[-2] | (frame[-1] << 8)
-                with ctrl._lock:
-                    ctrl.gripper_frames.append(frame)
-                    reply = ctrl.gripper_modbus(frame) if crc_ok else []
-                self._reply(200, {"status": crc_ok, "data": {"value": reply, "index": len(ctrl.gripper_frames)}})
+                reply = ctrl.tool_bus.exchange(frame)
+                self._reply(200, {"status": bool(reply), "data": {"value": reply, "index": len(ctrl.tool_bus.frames)}})
 
         return Handler
 

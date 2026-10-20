@@ -133,6 +133,7 @@ def test_bad_ip_in_yaml_rejected(tmp_path, ip):
 def test_host_names_still_allowed(tmp_path):
     data = yaml.safe_load((ROBOTS / "dobot_cr5.yaml").read_text(encoding="utf-8"))
     data["connection"]["ip"] = "cr5-lab.local"
+    data["urdf"] = str(load_robot_config(ROBOTS / "dobot_cr5.yaml").model_urdf)  # still found from tmp_path
     path = tmp_path / "r.yaml"
     path.write_text(yaml.safe_dump(data), encoding="utf-8")
     assert load_robot_config(path).connection.ip == "cr5-lab.local"

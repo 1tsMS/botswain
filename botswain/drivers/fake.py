@@ -29,6 +29,7 @@ from botswain.core.types import (
     joint_index,
 )
 from botswain.drivers.base import Check, Driver, DriverError
+from botswain.tools.fake_dh import FakeDhBus
 
 log = logging.getLogger(__name__)
 
@@ -46,8 +47,7 @@ class FakeDriver(Driver):
         self.joint_speed_deg_s = joint_speed_deg_s
         self.capabilities = Capabilities(
             name=cfg.name, dof=cfg.dof, step_jog=True, hold_jog=True, streaming=True,
-            stream_rate_hz=1.0 / cfg.stream.period_s, gripper=cfg.gripper is not None, drag_mode=True,
-            gripper_force=cfg.gripper is not None,
+            stream_rate_hz=1.0 / cfg.stream.period_s, gripper=False, drag_mode=True,
             frames=("base", "tool"), max_tcp_speed_mm_s=lin_speed_mm_s,
         )
         self.kin = Kinematics(cfg.model_urdf)
@@ -58,8 +58,8 @@ class FakeDriver(Driver):
         self._mode = Mode.DISCONNECTED
         self._speed_pct = 10
         self._errors: tuple[int, ...] = ()
-        self._gripper: float | None = None
-        self.gripper_force: int | None = None  # last SetGripperForce (tests read it)
+        # A pretend DH gripper on the tool port, so the real end-effector driver runs against the fake robot.
+        self.tool_bus = FakeDhBus() if cfg.tool_port == "rs485" else None
         self._link_ok = False
         self._latency_s = 0.0
         self._last_ns = now_ns()
@@ -134,8 +134,7 @@ class FakeDriver(Driver):
             q_target = self._q_goal if self._q_goal is not None else self._q
             return RobotState(
                 t_ns=now, mode=self._mode, joints=Joints(tuple(self._q)), tcp=tcp, joints_target=Joints(tuple(q_target)),
-                tcp_target=tcp_target, speed_pct=self._speed_pct, errors=self._errors, gripper=self._gripper,
-                gripper_pos=self._gripper, gripper_status="" if self._gripper is None else "at position",
+                tcp_target=tcp_target, speed_pct=self._speed_pct, errors=self._errors,
                 raw_mode=-1, link_ok=self._link_ok, feedback_hz=self._hz if self._link_ok else 0.0,
             )
 
@@ -241,21 +240,8 @@ class FakeDriver(Driver):
             self._lin_goal, self._q_goal = pose_to_matrix(pose), None
             self._mode = Mode.STREAMING
 
-    def gripper(self, open: bool) -> None:
-        if not self.capabilities.gripper:
-            raise DriverError(-1, "no gripper in the robot YAML")
-        self._command()
-        with self._lock:
-            self._gripper = 1.0 if open else 0.0
-
-    def set_gripper_force(self, pct: int) -> None:
-        if not self.capabilities.gripper:
-            raise DriverError(-1, "no gripper in the robot YAML")
-        if not 20 <= pct <= 100:
-            raise DriverError(-1, f"gripper force must be 20..100 %, got {pct}")
-        self._command()
-        with self._lock:
-            self.gripper_force = int(pct)
+    def tool_port(self) -> FakeDhBus | None:
+        return self.tool_bus
 
     def diagnose(self) -> list[Check]:
         return [Check("Driver", "ok", "fake robot, no hardware to check")]

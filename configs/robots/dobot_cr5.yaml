@@ -1,0 +1,22 @@
+# Lab Dobot CR5. Controller 3.5.x = Dobot's V3 command set (confirmed by its replies, 2026-10-19).
+# First-run limits are small on purpose; widen step by step after testing.
+# Lab-specific edits made in Botswain's Settings page go to dobot_cr5.local.yaml, not into this file.
+name: Dobot CR5
+vendor: Dobot
+model: CR5
+protocol: dobot_v3
+connection: {ip: 192.168.5.1, ports: {dashboard: 29999, motion: 29999, feedback: 30004, http: 22000}}
+urdf: ../../assets/dobot_cr5/cr5_robot.urdf
+tool_port: rs485  # end effectors on the tool flange: RS485 through the controller (HTTP 22000)
+limits:
+  speed_cap_pct: 100
+  controller_speed_max_pct: 20  # speed control 100 % = Dobot SpeedFactor 20 (10 % -> 2); tune in the lab
+  box_enabled: false  # switch on in the Robot view (Safety box)
+  box_mm: {x: [-632, -332], y: [-286, 14], z: [334, 634]}  # +-150 mm around the Phone2Act start pose
+  joints_deg: [[-360, 360], [-360, 360], [-160, 160], [-360, 360], [-360, 360], [-360, 360]]
+  max_tcp_speed_mm_s: 150
+  max_step_deg: 2.0
+  teleport_mm: 80
+  stale_ms: 200
+stream: {period_s: 0.03, aheadtime: 50, gain: 500}
+home: {joints_deg: [0, 0, 90, 0, -90, 0], confirmed: true}  # confirmed by MS in the lab 2026-10-19

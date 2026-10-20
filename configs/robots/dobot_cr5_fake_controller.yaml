@@ -1,0 +1,20 @@
+# The real Dobot V3 driver pointed at the fake controller on this laptop. Start the fake first:
+#   .venv\Scripts\python -m botswain.drivers.dobot.fake_controller
+name: Dobot CR5 (fake controller)
+vendor: Dobot
+model: CR5
+protocol: dobot_v3
+connection: {ip: 127.0.0.1, ports: {dashboard: 29999, motion: 29999, feedback: 30004, http: 22000}}
+urdf: ../../assets/dobot_cr5/cr5_robot.urdf
+tool_port: rs485
+limits:
+  speed_cap_pct: 100
+  box_enabled: false
+  box_mm: {x: [-632, -332], y: [-286, 14], z: [334, 634]}
+  joints_deg: [[-360, 360], [-360, 360], [-160, 160], [-360, 360], [-360, 360], [-360, 360]]
+  max_tcp_speed_mm_s: 150
+  max_step_deg: 2.0
+  teleport_mm: 80
+  stale_ms: 200
+stream: {period_s: 0.03, aheadtime: 50, gain: 500}
+home: {joints_deg: [0, 0, 90, 0, -90, 0], confirmed: true}  # fake controller, nothing to hit

@@ -1,9 +1,8 @@
 import pytest
-import yaml
-from helpers import ROBOTS
+from helpers import DH_TOOL, ROBOTS
 
 from botswain.app import build
-from botswain.core.config import load_robot_config
+from botswain.core.config import load_robot_config, load_tool_config
 from botswain.core.types import Connect, Enable, JogStep, Mode
 from botswain.ui.rail import PAGES
 
@@ -12,9 +11,9 @@ from botswain.ui.rail import PAGES
 def make_window(qtbot):
     built = []
 
-    def make(cfg=None, view_3d=False):
+    def make(cfg=None, view_3d=False, tool=True):
         cfg = cfg or load_robot_config(ROBOTS / "fake.yaml")
-        worker, window = build(cfg, view_3d=view_3d)
+        worker, window = build(cfg, view_3d=view_3d, tool_cfg=load_tool_config(DH_TOOL) if tool else None)
         qtbot.addWidget(window)
         built.append(window)
         return worker, window
@@ -81,16 +80,12 @@ def test_fields_read_only_until_edit_target(qtbot, make_window):
     assert page.orientation.meta_label.text() == "editing target"
 
 
-def test_hidden_when_not_capable(tmp_path, make_window):
-    data = yaml.safe_load((ROBOTS / "fake.yaml").read_text(encoding="utf-8"))
-    data.pop("gripper")
-    data["model"]["urdf"] = str(ROBOTS.parent / "assets" / "dobot_cr5" / "cr5_robot.urdf")
-    path = tmp_path / "no_gripper.yaml"
-    path.write_text(yaml.safe_dump(data), encoding="utf-8")
-    _, w = make_window(load_robot_config(path))
-    assert w.jog_page.gripper_open_btn.isHidden() and w.jog_page.gripper_close_btn.isHidden()
+def test_hidden_when_not_capable(make_window):
+    _, w = make_window(tool=False)  # no end effector selected
+    page = w.jog_page
+    assert page.gripper_open_btn.isHidden() and page.gripper_close_btn.isHidden() and page.force_box.isHidden()
     _, w2 = make_window()
-    assert not w2.jog_page.gripper_open_btn.isHidden()
+    assert not w2.jog_page.gripper_open_btn.isHidden() and not w2.jog_page.force_box.isHidden()
 
 
 def test_home_disabled_until_confirmed(qtbot, make_window):

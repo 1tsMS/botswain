@@ -5,7 +5,7 @@ import threading
 import time
 
 import pytest
-from helpers import ROBOTS, wait_for
+from helpers import ROBOTS, dh_tool, wait_for
 
 from botswain.control.points import PointStore
 from botswain.control.program import ProgramError, ProgramRunner
@@ -19,7 +19,7 @@ from botswain.drivers.fake import FakeDriver
 @pytest.fixture
 def rig(tmp_path):
     cfg = load_robot_config(ROBOTS / "fake.yaml")
-    w = RobotWorker(FakeDriver(cfg), SafetyGate(cfg.limits, cfg.stream.period_s))
+    w = RobotWorker(FakeDriver(cfg), SafetyGate(cfg.limits, cfg.stream.period_s), tool=dh_tool())
     w.start()
     w.submit(Connect())
     w.submit(Enable())

@@ -142,12 +142,6 @@ def test_stream_target_follows(fake):
     assert wait_for(lambda: abs(fake.read_state().tcp.y - (p.y + 5)) < 1e-4)
 
 
-def test_gripper_state(fake):
-    assert fake.read_state().gripper is None
-    fake.gripper(False)
-    assert fake.read_state().gripper == 0.0
-
-
 def test_rejects_wrong_joint_count(fake):
     fake.enable()
     with pytest.raises(DriverError):

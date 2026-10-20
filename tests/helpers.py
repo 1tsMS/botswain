@@ -11,10 +11,12 @@ from botswain.core.types import Joints, Mode, Pose, RobotState
 from botswain.drivers.fake import FakeDriver
 
 ROOT = Path(__file__).resolve().parents[1]
-ROBOTS = ROOT / "robots"
+ROBOTS = ROOT / "configs" / "robots"
+TOOLS = ROOT / "configs" / "tools"
+DH_TOOL = TOOLS / "dh_pge_50_26.yaml"
 
 SPIED = ("connect", "disconnect", "enable", "disable", "clear_error", "stop", "set_speed", "jog_step",
-         "move_to", "jog_hold", "jog_release", "stream_target", "gripper")
+         "move_to", "jog_hold", "jog_release", "stream_target")
 
 
 def wait_for(pred: Callable[[], bool], timeout: float = 1.0, step: float = 0.002) -> bool:
@@ -64,13 +66,21 @@ for _name in SPIED:
 
 
 def dobot_cfg(ctrl, motion_port: int | None = None):
-    """dobot_cr5_fake.yaml pointed at a FakeDobotController on random ports."""
+    """dobot_cr5_fake_controller.yaml pointed at a FakeDobotController on random ports."""
     from dataclasses import replace
 
     from botswain.core.config import load_robot_config
 
-    base = load_robot_config(ROBOTS / "dobot_cr5_fake.yaml")
+    base = load_robot_config(ROBOTS / "dobot_cr5_fake_controller.yaml")
     p = ctrl.ports
-    conn = replace(base.connection, dashboard_port=p["dashboard"], motion_port=motion_port or p["dashboard"],
-                   feedback_port=p["feedback"], http_port=p["http"])
+    conn = base.connection.with_ports(dashboard=p["dashboard"], motion=motion_port or p["dashboard"],
+                                      feedback=p["feedback"], http=p["http"])
     return replace(base, connection=conn)
+
+
+def dh_tool():
+    """The lab's DH gripper driver (talks to whatever tool port it is connected to)."""
+    from botswain.core.config import load_robot_config, load_tool_config
+    from botswain.drivers.registry import make_tool
+
+    return make_tool(load_tool_config(DH_TOOL), load_robot_config(ROBOTS / "fake.yaml"))

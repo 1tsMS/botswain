@@ -1,6 +1,6 @@
-"""python -m botswain [--robot robots/dobot_cr5.yaml]
+"""python -m botswain [--robot configs/robots/dobot_cr5.yaml] [--tool configs/tools/dh_pge_50_26.yaml]
 
-Without --robot it opens the robot used last time (robots/.last), else the fake robot.
+Without arguments it opens the robot and end effector picked last on the Settings page, else the fake robot.
 """
 
 from __future__ import annotations
@@ -9,35 +9,27 @@ import argparse
 import sys
 from pathlib import Path
 
-from botswain.core.config import ConfigError, load_robot_config
-
-ROBOTS = Path(__file__).resolve().parents[1] / "robots"
-LAST = ROBOTS / ".last"
-
-
-def _default_robot() -> Path:
-    if LAST.exists():
-        last = Path(LAST.read_text(encoding="utf-8").strip())
-        if last.exists():
-            return last
-    return ROBOTS / "fake.yaml"
+from botswain.core.config import ROBOT_DIR, ConfigError, load_robot_config, load_tool_config, read_selection
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="botswain", description=__doc__.splitlines()[0])
-    parser.add_argument("--robot", type=Path, help="robot YAML (default: last used, else robots/fake.yaml)")
+    parser.add_argument("--robot", type=Path, help="robot config (default: picked last in Settings, else fake)")
+    parser.add_argument("--tool", type=Path, help="end-effector config (default: picked last in Settings)")
     args = parser.parse_args(argv)
-    path = (args.robot or _default_robot()).resolve()
+    picked_robot, picked_tool = read_selection()
+    robot_path = (args.robot or picked_robot or ROBOT_DIR / "fake.yaml").resolve()
+    tool_path = args.tool if args.tool else (picked_tool if not args.robot else None)
     try:
-        cfg = load_robot_config(path)
+        cfg = load_robot_config(robot_path)
+        tool_cfg = load_tool_config(tool_path) if tool_path else None
     except ConfigError as e:
-        print(f"Robot config {path} is not valid: {e}", file=sys.stderr)
+        print(f"Config not valid: {e}", file=sys.stderr)
         return 2
-    LAST.write_text(str(path), encoding="utf-8")
 
-    from botswain.app import run  # Qt loads only after the config is known to be good
+    from botswain.app import run  # Qt loads only after the configs are known to be good
 
-    return run(cfg)
+    return run(cfg, tool_cfg)
 
 
 if __name__ == "__main__":

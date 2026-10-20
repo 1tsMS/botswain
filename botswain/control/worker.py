@@ -19,6 +19,7 @@ from botswain.control.safety import Rejected, SafetyGate
 from botswain.core.clock import now_ns
 from botswain.core.log import LEVELS
 from botswain.core.types import (
+    Capabilities,
     ClearError,
     Command,
     Connect,
@@ -44,6 +45,7 @@ from botswain.core.types import (
     StreamTarget,
 )
 from botswain.drivers.base import Check, Driver, DriverError
+from botswain.tools.base import Tool
 
 log = logging.getLogger(__name__)
 
@@ -78,8 +80,10 @@ class Commanded:
 
 
 class RobotWorker:
-    def __init__(self, driver: Driver, gate: SafetyGate, tick_s: float = 0.008, publish_hz: float = 30.0) -> None:
+    def __init__(self, driver: Driver, gate: SafetyGate, tick_s: float = 0.008, publish_hz: float = 30.0,
+                 tool: Tool | None = None) -> None:
         self.driver = driver
+        self.tool = tool  # the end effector (its own driver), reached through driver.tool_port(); None = none
         self.gate = gate
         self.tick_s = tick_s
         self.publish_period_ns = int(1e9 / publish_hz)
@@ -170,6 +174,14 @@ class RobotWorker:
         return ""
 
     @property
+    def capabilities(self) -> Capabilities:
+        """The arm's card plus what the end effector adds. The GUI reads this, not driver.capabilities."""
+        caps = self.driver.capabilities
+        if self.tool is None:
+            return caps
+        return replace(caps, gripper=self.tool.caps.open_close, gripper_force=self.tool.caps.force)
+
+    @property
     def running(self) -> bool:
         return self._thread.is_alive()
 
@@ -256,8 +268,10 @@ class RobotWorker:
                 if self._call("connect", d.connect):
                     self._connected = True
                     self._log("info", f"connected: {d.capabilities.name}")
+                    self._connect_tool()
             case Disconnect():
                 self._hold_tick_ns = None
+                self._disconnect_tool()
                 self._call("stop", d.stop)
                 self._call("disconnect", d.disconnect)
                 self._connected = False
@@ -293,19 +307,22 @@ class RobotWorker:
             case StreamTarget():
                 self._log("error", "StreamTarget must go through worker.stream(), not the queue")
             case Gripper(open=is_open):
-                self._call("gripper", d.gripper, is_open)
+                if self.tool is None:
+                    self._log("error", "no end effector selected (Settings)")
+                else:
+                    self._call("gripper", self.tool.set_open, is_open)
             case Drag(on=on):
                 if self._call("drag", d.drag, on):
                     self._log("info", "drag mode ON: guide the arm by hand" if on else "drag mode off")
             case SetGripperForce(pct=pct):
-                if self._call("gripper_force", d.set_gripper_force, pct):
+                if self.tool is not None and self._call("gripper_force", self.tool.set_force, pct):
                     self._log("info", f"gripper closing force {pct} %")
             case RequestControl():
                 if self._call("request_control", d.request_control):
                     self._log("info", "controller control taken (RequestControl)")
             case Diagnose(reply=reply):
                 try:
-                    checks = d.diagnose()
+                    checks = d.diagnose() + (self.tool.diagnose() if self.tool is not None else [])
                 except Exception as e:
                     log.exception("diagnose crashed")
                     checks = [Check("Driver checks", "fail", f"{type(e).__name__}: {e}")]
@@ -407,6 +424,10 @@ class RobotWorker:
         except Exception as e:  # noqa: BLE001 -- keep the last state, mark the link dead so motion is refused
             self._log_rule("read_state", "error", f"read_state failed: {e}")
             state = replace(self.latest_state(), link_ok=False, feedback_hz=0.0)
+        if self.tool is not None and self._connected:
+            t = self.tool.status()
+            grip = None if t.commanded_open is None else float(t.commanded_open)
+            state = replace(state, gripper=grip, gripper_pos=t.opening, gripper_status=t.text)
         with self._state_lock:
             self._state = state
         return state
@@ -425,9 +446,25 @@ class RobotWorker:
             except Exception:
                 log.exception("on_state callback crashed")
 
+    def _connect_tool(self) -> None:
+        if self.tool is None:
+            return
+        port = self.driver.tool_port()
+        if port is None or port.kind != self.tool.port_kind:
+            self._log("error", f"the end effector needs an {self.tool.port_kind} tool port; this robot offers "
+                               f"{port.kind if port else 'none'}")
+            return
+        if self._call("tool connect", self.tool.connect, port):
+            self._log("info", "end effector connected")
+
+    def _disconnect_tool(self) -> None:
+        if self.tool is not None:
+            self._call("tool disconnect", self.tool.disconnect)
+
     def _close_driver(self) -> None:
         if not self._connected:
             return
+        self._disconnect_tool()
         self._call("stop", self.driver.stop)
         self._call("disconnect", self.driver.disconnect)
         self._connected = False

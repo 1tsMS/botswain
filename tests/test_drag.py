@@ -6,11 +6,11 @@ from importlib.util import find_spec
 
 import numpy as np
 import pytest
-from helpers import ROBOTS, dobot_cfg, make_state, wait_for
+from helpers import DH_TOOL, ROBOTS, dobot_cfg, make_state, wait_for
 
 from botswain.control.safety import Allowed, Rejected, SafetyGate
 from botswain.control.worker import RobotWorker
-from botswain.core.config import load_robot_config
+from botswain.core.config import load_robot_config, load_tool_config
 from botswain.core.types import Connect, Drag, Enable, Mode
 from botswain.drivers.base import DriverError
 from botswain.drivers.dobot.driver import DobotDriver
@@ -89,7 +89,8 @@ def test_dobot_drag_commands_and_stop():
 def test_toolbar_toggles_drag(qtbot):
     from botswain.app import build
 
-    worker, w = build(load_robot_config(ROBOTS / "fake.yaml"), view_3d=False)
+    worker, w = build(load_robot_config(ROBOTS / "fake.yaml"), view_3d=False,
+                     tool_cfg=load_tool_config(DH_TOOL))
     qtbot.addWidget(w)
     try:
         worker.submit(Connect())

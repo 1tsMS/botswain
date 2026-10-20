@@ -8,7 +8,7 @@ import urllib.request
 
 import pytest
 import websocket
-from helpers import ROBOTS, SpyDriver, wait_for
+from helpers import ROBOTS, SpyDriver, dh_tool, wait_for
 
 from botswain.control.safety import SafetyGate
 from botswain.control.worker import RobotWorker
@@ -51,7 +51,7 @@ def test_parse_normalises_and_rejects_bad_numbers():
 def rig():
     cfg = load_robot_config(ROBOTS / "fake.yaml")
     driver = SpyDriver(cfg, lin_speed_mm_s=1000.0)
-    worker = RobotWorker(driver, SafetyGate(cfg.limits, cfg.stream.period_s))
+    worker = RobotWorker(driver, SafetyGate(cfg.limits, cfg.stream.period_s), tool=dh_tool())
     logs = []
     worker.on_log = lambda level, text: logs.append(text)
     worker.start()

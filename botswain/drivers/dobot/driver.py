@@ -12,7 +12,7 @@ import json
 import logging
 import re
 import socket
-import threading
+import time
 import urllib.request
 from dataclasses import replace
 
@@ -33,23 +33,23 @@ from botswain.drivers.dobot import commands as cmd
 from botswain.drivers.dobot.dashboard import HINT_TCP, NO_LINK, NOT_TCP, TIMEOUT, DashboardClient
 from botswain.drivers.dobot.dialects import V3, V4, Dialect
 from botswain.drivers.dobot.feedback import STALE_NS, FeedbackPacket, FeedbackThread
-from botswain.drivers.dobot.gripper import (
-    FORCE_RANGE,
-    GRIP_STATES,
-    REG_CURRENT_POS,
-    REG_FORCE,
-    REG_GRIP_STATE,
-    REG_INIT_STATE,
-    DhGripper,
-)
+from botswain.drivers.dobot.tool_port import DobotRs485Port
 
 log = logging.getLogger(__name__)
 
 START_SPEED_PCT = 10  # set on connect, so the first move after Enable is slow whatever the pendant had
 ENABLE_TIMEOUT_S = 20.0  # EnableRobot answers only when enabling is done: over 5 s on the lab CR5
-GRIPPER_POLL_S = 0.25  # gripper status readout period
-GRIPPER_RETRY_S = 2.0  # after a failed read, try again this much later
 ALARM_WORDS = {-2: "collision", -3: "safe-skin collision"}  # GetErrorID codes with a name (V3 doc)
+PORTS = {"dashboard": 29999, "feedback": 30004, "http": 22000}  # defaults; "motion" defaults to the dashboard
+HINT_NET = "check the cable and controller power; the laptop needs a static IP on the robot's subnet (192.168.5.x)"
+
+
+def dobot_ports(cfg: RobotConfig) -> dict[str, int]:
+    """The controller's ports by name, from the robot config with Dobot's defaults filled in."""
+    c = cfg.connection
+    ports = {name: c.port(name, default) for name, default in PORTS.items()}
+    ports["motion"] = c.port("motion", ports["dashboard"])
+    return ports
 
 
 class DobotDriver(Driver):
@@ -60,32 +60,23 @@ class DobotDriver(Driver):
             raise DriverError(-1, f"{self.dialect.name} needs a connection section in the robot config")
         self.cfg = cfg
         c = cfg.connection
+        self.ports = dobot_ports(cfg)
         self.capabilities = Capabilities(
             name=cfg.name, dof=6, step_jog=True, hold_jog=True, streaming=True,
             stream_rate_hz=1.0 / cfg.stream.period_s,
-            gripper=cfg.gripper is not None and cfg.gripper.type == "dh_modbus",
+            gripper=False,  # end effectors are separate drivers (botswain/tools), reached through tool_port()
             frames=("base", "tool"), max_tcp_speed_mm_s=cfg.limits.max_tcp_speed_mm_s,
-            drag_mode=True,
-            gripper_force=cfg.gripper is not None and cfg.gripper.type == "dh_modbus",
-            request_control=self.dialect.request_control,
+            drag_mode=True, request_control=self.dialect.request_control,
         )
-        self._dash = DashboardClient(c.ip, c.dashboard_port)
-        self._motion = self._dash if c.motion_port == c.dashboard_port else DashboardClient(c.ip, c.motion_port)
+        p = self.ports
+        self._dash = DashboardClient(c.ip, p["dashboard"])
+        self._motion = self._dash if p["motion"] == p["dashboard"] else DashboardClient(c.ip, p["motion"])
         self._feedback: FeedbackThread | None = None
         self._latest: tuple[FeedbackPacket, int] | None = None  # (packet, arrival ns), replaced atomically
         self._connected = False
         self._speed_pct = 0
         self._streaming = False
         self._alarm_ids: tuple[int, ...] = ()
-        self._gripper_dev = (DhGripper(f"http://{c.ip}:{c.http_port}", cfg.gripper.slave)
-                             if self.capabilities.gripper and cfg.gripper else None)
-        self._gripper_ready = False
-        self._gripper_pos: float | None = None
-        self._gripper_force: int | None = None  # what the gripper's force register holds, as far as we know
-        self._gripper_force_wanted: int | None = None  # set before init: written right after it
-        self._gripper_meas: tuple[float | None, str] = (None, "")  # (opening 0..1, status), from the poll thread
-        self._gripper_poll: threading.Thread | None = None
-        self._gripper_poll_stop = threading.Event()
 
     @property
     def latency_ms(self) -> float | None:
@@ -101,7 +92,7 @@ class DobotDriver(Driver):
             self._dash.connect()
             if self._motion is not self._dash:
                 self._motion.connect()
-            self._feedback = FeedbackThread(c.ip, c.feedback_port, self._on_packet)
+            self._feedback = FeedbackThread(c.ip, self.ports["feedback"], self._on_packet)
             self._feedback.start()
             if self._dash.call(cmd.robot_mode()).error_id == NOT_TCP:
                 raise DriverError(NOT_TCP, "controller is not in TCP/IP mode", HINT_TCP)
@@ -112,13 +103,7 @@ class DobotDriver(Driver):
             self._close_links()
             raise
         self._connected = True
-        self._gripper_ready = False
-        self._gripper_force = None
         self._alarm_ids = ()
-        if self._gripper_dev is not None:
-            self._gripper_poll_stop.clear()
-            self._gripper_poll = threading.Thread(target=self._poll_gripper, name="gripper-poll", daemon=True)
-            self._gripper_poll.start()
 
     def disconnect(self) -> None:
         # The worker calls stop() itself right before this and reports a failure there; here a dead link
@@ -133,11 +118,6 @@ class DobotDriver(Driver):
     def _close_links(self) -> None:
         self._connected = False
         self._streaming = False
-        self._gripper_poll_stop.set()
-        if self._gripper_poll is not None:
-            self._gripper_poll.join(2.0)
-            self._gripper_poll = None
-        self._gripper_meas = (None, "")
         if self._feedback is not None:
             self._feedback.stop()
             self._feedback = None
@@ -167,7 +147,6 @@ class DobotDriver(Driver):
             t_ns=t, mode=mode, joints=Joints(p.q_actual), tcp=Pose(*p.tcp_actual), joints_target=Joints(p.q_target),
             tcp_target=Pose(*p.tcp_target), speed_pct=self._speed_pct,
             errors=self._alarm_ids if mode in (Mode.ERROR, Mode.COLLISION) else (),
-            gripper=self._gripper_pos, gripper_pos=self._gripper_meas[0], gripper_status=self._gripper_meas[1],
             raw_mode=p.mode, link_ok=link_ok,
             feedback_hz=self._feedback.hz if self._feedback else 0.0,
             fault=self._fault(mode, now - t),
@@ -293,57 +272,10 @@ class DobotDriver(Driver):
         or sags in drag: check it in DobotStudio before the first drag."""
         self._ok(self._dash, cmd.start_drag() if on else cmd.stop_drag())
 
-    # ---- gripper (DH over the tool RS485 port) ----
-
-    def gripper(self, open: bool) -> None:
-        if self._gripper_dev is None:
-            raise DriverError(-1, "no DH gripper configured in the robot config")
-        if not self._gripper_ready:
-            log.info("gripper init reply: %s", self._gripper_dev.init())
-            self._gripper_ready = True
-        wanted = self._gripper_force_wanted
-        if wanted is not None and wanted != self._gripper_force:
-            self._write_force(wanted)
-        reply = self._gripper_dev.open() if open else self._gripper_dev.close()
-        log.info("gripper %s reply: %s", "open" if open else "close", reply)
-        self._gripper_pos = 1.0 if open else 0.0  # commanded; the measured opening is gripper_pos
-
-    def set_gripper_force(self, pct: int) -> None:
-        """Closing force for every later close (the gripper keeps it). Before init it waits for the first close."""
-        if self._gripper_dev is None:
-            raise DriverError(-1, "no DH gripper configured in the robot config")
-        lo, hi = FORCE_RANGE
-        if not lo <= pct <= hi:
-            raise DriverError(-1, f"gripper force must be {lo}..{hi} %, got {pct}")
-        self._gripper_force_wanted = int(pct)
-        if self._gripper_ready:
-            self._write_force(int(pct))
-
-    def _write_force(self, pct: int) -> None:
-        log.info("gripper force %d %% reply: %s", pct, self._gripper_dev.set_force(pct))
-        self._gripper_force = pct
-
-    def _poll_gripper(self) -> None:
-        """Gripper status for the GUI, read-only. Never initialises: DH init moves the jaws."""
-        dev, failed, period = self._gripper_dev, False, 0.0
-        while not self._gripper_poll_stop.wait(period):
-            try:
-                if not self._gripper_ready:
-                    if dev.read(REG_INIT_STATE) != 1:
-                        self._gripper_meas = (None, "not initialised: press Open or Close once")
-                        period = GRIPPER_POLL_S  # so the status appears right after the first Open/Close
-                        continue
-                    self._gripper_ready = True  # already initialised (e.g. by DobotStudio): no init motion needed
-                state, pos = dev.read(REG_GRIP_STATE), dev.read(REG_CURRENT_POS)
-                self._gripper_meas = (min(max(pos / 1000.0, 0.0), 1.0), GRIP_STATES.get(state, f"state {state}"))
-                if failed:
-                    log.info("gripper readout working again")
-                failed, period = False, GRIPPER_POLL_S
-            except DriverError as e:
-                if not failed:
-                    log.warning("gripper readout failed (retrying every %.0f s): %s", GRIPPER_RETRY_S, e.message)
-                self._gripper_meas = (None, "no reading")
-                failed, period = True, GRIPPER_RETRY_S
+    def tool_port(self) -> DobotRs485Port | None:
+        """RS485 on the tool flange, through the controller's HTTP server (if the robot config offers it)."""
+        c = self.cfg.connection
+        return DobotRs485Port(f"http://{c.ip}:{self.ports['http']}") if self.cfg.tool_port == "rs485" else None
 
     def request_control(self) -> None:
         """RequestControl() (V4 >= 4.6 only). Works before Connect, which is the point: Connect fails with
@@ -355,7 +287,7 @@ class DobotDriver(Driver):
             self._ok(self._dash, cmd.request_control())
             return
         c = self.cfg.connection
-        dash = DashboardClient(c.ip, c.dashboard_port)
+        dash = DashboardClient(c.ip, self.ports["dashboard"])
         dash.connect()
         try:
             dash.call_ok(cmd.request_control())
@@ -363,6 +295,45 @@ class DobotDriver(Driver):
             dash.close()
 
     # ---- Doctor ----
+
+    @classmethod
+    def offline_checks(cls, cfg: RobotConfig, sample_s: float = 1.0) -> list[Check]:
+        """Feedback rate and TCP/IP mode without connecting (Doctor before Connect). Short own connections."""
+        from botswain.drivers.dobot.feedback import FrameReader
+
+        c, p = cfg.connection, dobot_ports(cfg)
+        checks = [Check("Protocol", "ok", cls.dialect.label)]
+        try:
+            with socket.create_connection((c.ip, p["feedback"]), timeout=0.5) as sock:
+                sock.settimeout(0.2)
+                reader, count, t_end = FrameReader(), 0, time.perf_counter() + sample_s
+                while time.perf_counter() < t_end:
+                    try:
+                        data = sock.recv(65536)
+                    except TimeoutError:
+                        continue
+                    if not data:
+                        break
+                    count += len(reader.feed(data))
+            hz = count / sample_s
+            status = "ok" if 100 <= hz <= 150 else "warn" if hz > 0 else "fail"
+            checks.append(Check("Feedback rate", status, f"{hz:.0f} Hz, {reader.bad_frames} bad frames",
+                                "" if status == "ok" else "expected ~125 Hz"))
+        except OSError as e:
+            checks.append(Check("Feedback rate", "fail", f"cannot read ({e.__class__.__name__})", HINT_NET))
+        dash = DashboardClient(c.ip, p["dashboard"], timeout_s=1.0)
+        try:
+            dash.connect()
+            reply = dash.call("RobotMode()")
+            if reply.error_id == NOT_TCP:
+                checks.append(Check("TCP/IP mode", "fail", "controller answered 'Not Tcp'", HINT_TCP))
+            else:
+                checks.append(Check("TCP/IP mode", "ok", f"RobotMode = {reply.values}"))
+        except DriverError as e:
+            checks.append(Check("TCP/IP mode", "fail", e.message, e.hint))
+        finally:
+            dash.close()
+        return checks
 
     def diagnose(self) -> list[Check]:
         checks: list[Check] = [Check("Protocol", "ok", self.dialect.label)]
@@ -396,17 +367,15 @@ class DobotDriver(Driver):
         ctrl_max = self.cfg.limits.controller_speed_max_pct
         checks.append(Check("Speed scaling", "ok", f"speed control 100 % = SpeedFactor {ctrl_max} "
                             f"(now {self._speed_pct} % = {self._controller_pct(self._speed_pct)})"))
-        if self._gripper_dev is not None:
-            checks.append(self._gripper_force_check())
         checks.append(self._pose_check())
         return checks
 
     def _motion_port_check(self) -> Check:
         """Moves go to 29999 or, per the V3 doc, 30003. Reports whether 30003 accepts a connection and answers;
         sends only RobotMode() (never a move), and only when 30003 is not in use already."""
-        c = self.cfg.connection
-        if c.motion_port != c.dashboard_port:
-            return Check("Motion port", "ok", f"moves go to {c.motion_port}")
+        c, p = self.cfg.connection, self.ports
+        if p["motion"] != p["dashboard"]:
+            return Check("Motion port", "ok", f"moves go to {p['motion']}")
         # Information, not a fault: either answer is a working setup today.
         try:
             with socket.create_connection((c.ip, 30003), timeout=1.0) as s:
@@ -420,19 +389,7 @@ class DobotDriver(Driver):
             return Check("Motion port", "ok", f"moves go to 29999; 30003 not reachable ({type(e).__name__})")
         heard = f"answers ({answer[:40]!r})" if answer else "accepts connections but did not answer RobotMode()"
         return Check("Motion port", "ok", f"moves go to 29999; 30003 {heard}",
-                     "the V3 doc puts moves on 30003: try connection.motion_port: 30003 in the lab")
-
-    def _gripper_force_check(self) -> Check:
-        if not self._gripper_ready:
-            return Check("Gripper force", "ok", "read after the first Open or Close (gripper not initialised)")
-        try:
-            value = self._gripper_dev.read(REG_FORCE)
-        except DriverError as e:
-            return Check("Gripper force", "warn", e.message, e.hint)
-        sent = "" if self._gripper_force is None else f" (last set {self._gripper_force} %)"
-        ok = self._gripper_force is None or value == self._gripper_force
-        return Check("Gripper force", "ok" if ok else "warn", f"register 0x0101 = {value} %{sent}",
-                     "" if ok else "the gripper did not keep the force we set")
+                     "the V3 doc puts moves on 30003: try connection.ports.motion: 30003 in the lab")
 
     def _pose_check(self) -> Check:
         latest = self._latest
@@ -450,7 +407,7 @@ class DobotDriver(Driver):
                      "" if ok else "a user/tool frame may be active on the controller; check DobotStudio")
 
     def _alarm_text(self) -> str:
-        url = f"http://{self.cfg.connection.ip}:{self.cfg.connection.http_port}/protocol/getAlarm"
+        url = f"http://{self.cfg.connection.ip}:{self.ports['http']}/protocol/getAlarm"
         try:
             with urllib.request.urlopen(url, timeout=1.0) as resp:
                 body = resp.read().decode("utf-8", "replace")

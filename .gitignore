@@ -7,8 +7,9 @@ __pycache__/
 .research_tmp/
 data/
 logs/
-robots/.last
-robots/*.points.json
+configs/selection.yaml
+configs/**/*.local.yaml
+configs/robots/*.points.json
 .tmp/
 assets/certs/
 programs/

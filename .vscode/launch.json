@@ -2,11 +2,24 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Botswain (as picked in Settings)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "botswain",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}"
+    },
+    {
       "name": "Botswain: fake robot",
       "type": "debugpy",
       "request": "launch",
       "module": "botswain",
-      "args": ["--robot", "robots/fake.yaml"],
+      "args": [
+        "--robot",
+        "configs/robots/fake.yaml",
+        "--tool",
+        "configs/tools/dh_pge_50_26.yaml"
+      ],
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "cwd": "${workspaceFolder}",
       "justMyCode": true
@@ -16,7 +29,12 @@
       "type": "debugpy",
       "request": "launch",
       "module": "botswain",
-      "args": ["--robot", "robots/dobot_cr5.yaml"],
+      "args": [
+        "--robot",
+        "configs/robots/dobot_cr5.yaml",
+        "--tool",
+        "configs/tools/dh_pge_50_26.yaml"
+      ],
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "cwd": "${workspaceFolder}"
     },
@@ -34,7 +52,12 @@
       "type": "debugpy",
       "request": "launch",
       "module": "botswain",
-      "args": ["--robot", "robots/dobot_cr5_fake.yaml"],
+      "args": [
+        "--robot",
+        "configs/robots/dobot_cr5_fake_controller.yaml",
+        "--tool",
+        "configs/tools/dh_pge_50_26.yaml"
+      ],
       "python": "${workspaceFolder}/.venv/Scripts/python.exe",
       "cwd": "${workspaceFolder}"
     }
@@ -42,7 +65,10 @@
   "compounds": [
     {
       "name": "Botswain + fake Dobot controller",
-      "configurations": ["Fake Dobot controller", "Botswain: Dobot driver vs fake controller"],
+      "configurations": [
+        "Fake Dobot controller",
+        "Botswain: Dobot driver vs fake controller"
+      ],
       "stopAll": true
     }
   ]

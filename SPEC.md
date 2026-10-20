@@ -1,3 +1,7 @@
+> **2026-10-20:** configs moved to `configs/robots` + `configs/tools` (protocol, named ports, tool port,
+> end effectors as their own drivers in `botswain/tools`); the lab CR5 is protocol `dobot_v3`. The README
+> describes the current layout; the sections below are the original design record.
+
 # Botswain spec
 
 Version 1, 2026-10-17. Living document: change this file first, then the code.

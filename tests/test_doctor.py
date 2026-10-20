@@ -53,7 +53,7 @@ def test_doctor_before_connect_probes_itself(ctrl):
 
 def test_doctor_port_closed_fails_with_hint(ctrl):
     cfg = dobot_cfg(ctrl)
-    cfg = replace(cfg, connection=replace(cfg.connection, feedback_port=closed_port()))
+    cfg = replace(cfg, connection=cfg.connection.with_ports(feedback=closed_port()))
     check = by_name(network_checks(cfg, connected=False), "Feedback port")
     assert check.status == "fail" and "192.168.5" in check.hint
 

@@ -3,16 +3,18 @@
 from __future__ import annotations
 
 import logging
+import sys
 import time
+from pathlib import Path
 
-from PySide6.QtCore import QEvent, QObject, Qt
+from PySide6.QtCore import QEvent, QObject, QProcess, Qt
 from PySide6.QtGui import QAction, QKeyEvent
 from PySide6.QtWidgets import QApplication, QFrame, QLabel, QMainWindow, QScrollArea, QStackedWidget, QWidget
 
 from botswain.control.points import PointStore
 from botswain.control.program import ProgramRunner
 from botswain.control.worker import RobotWorker
-from botswain.core.config import RobotConfig
+from botswain.core.config import ROOT, RobotConfig, ToolConfig, write_selection
 from botswain.core.log import LEVELS
 from botswain.core.types import (
     ClearError,
@@ -37,6 +39,7 @@ from botswain.ui.pages.jog_page import JogPage
 from botswain.ui.pages.placeholder_page import PlaceholderPage
 from botswain.ui.pages.points_page import PointsView
 from botswain.ui.pages.record_bar import EpisodeBar
+from botswain.ui.pages.settings_page import SettingsPage, box_limits
 from botswain.ui.pages.teleop_page import TeleopPage
 from botswain.ui.pages.vr_page import VrPage
 from botswain.ui.rail import PAGES, Rail
@@ -74,12 +77,13 @@ class StopKeyFilter(QObject):
 
 class MainWindow(QMainWindow):
     def __init__(self, cfg: RobotConfig, worker: RobotWorker, bridge: QObject, view_3d: bool = True,
-                 parent: QWidget | None = None) -> None:
+                 parent: QWidget | None = None, tool_cfg: ToolConfig | None = None) -> None:
         super().__init__(parent)
         self.cfg = cfg
         self.worker = worker
         self.bridge = bridge  # keep the signal bridge alive as long as the window
-        caps = worker.driver.capabilities
+        self.tool_cfg = tool_cfg
+        caps = worker.capabilities  # the arm's card plus the end effector's
         self.setWindowTitle(f"Botswain · {cfg.name}")
         self.resize(1440, 900)
 
@@ -99,15 +103,16 @@ class MainWindow(QMainWindow):
         home = cfg.home_joints_deg if cfg.home_confirmed else None
         self.runner = ProgramRunner(worker, self.points, home, log_cb=self._log)
         self.blocks_page = BlocksPage(self.runner, lambda: [p.name for p in self.points.all()], self._log)
-        notes = {"Script": "coming later",
-                 "Teleop": "phone teleop comes in T5", "Cameras": "cameras come in T5",
-                 "Settings": f"robot settings live in {cfg.path.name}"}
+        self.settings_page = SettingsPage(cfg, tool_cfg, worker, self._log, restart=self._restart,
+                                          apply_box=self._apply_box)
+        notes = {"Script": "coming later"}
         self.pages: dict[str, QWidget] = {}
         self._stack_items: dict[str, QWidget] = {}
         self.jog_page.setMinimumSize(1000, 520)  # below this the page scrolls instead of squashing
         for name in PAGES:
             built = {"Jog": self.jog_page, "Points": self.points_page, "Teleop": self.teleop_page,
-                     "VR": self.vr_page, "Cameras": self.cameras_page, "Blocks": self.blocks_page}
+                     "VR": self.vr_page, "Cameras": self.cameras_page, "Blocks": self.blocks_page,
+                     "Settings": self.settings_page}
             page = built.get(name) or PlaceholderPage(name, notes[name])
             self.pages[name] = page
             self._stack_items[name] = self._scrollable(page)
@@ -161,7 +166,7 @@ class MainWindow(QMainWindow):
         robot.addAction("Connect / Disconnect", self._toggle_connect)
         robot.addAction("Recover (reconnect, stop, clear error)", lambda: self.worker.submit(Recover()))
         robot.addAction("Clear error only", lambda: self.worker.submit(ClearError()))
-        if self.worker.driver.capabilities.request_control:  # controllers that can switch themselves to remote control (Dobot V4 >= 4.6)
+        if self.worker.capabilities.request_control:  # controllers that can switch themselves to remote control (Dobot V4 >= 4.6)
             robot.addAction("Take control (RequestControl)", lambda: self.worker.submit(RequestControl()))
         stop = QAction("STOP", self)
         stop.setShortcutVisibleInContextMenu(True)
@@ -202,6 +207,22 @@ class MainWindow(QMainWindow):
         area.setFrameShape(QFrame.Shape.NoFrame)
         area.setWidget(page)
         return area
+
+    def _apply_box(self, box_mm: tuple, enabled: bool) -> None:
+        """A safety box taught or typed in Settings: the gate uses it at once, the views show it."""
+        self.worker.gate.limits = box_limits(self.worker.gate.limits, box_mm, enabled)
+        view = self.jog_page.robot_view
+        view.set_box(box_mm)
+        view.box_chip.setChecked(enabled)  # also switches the gate (box_toggled)
+        self.status.set_box(box_mm)
+        self.jog_page.pose_fields.set_limits(self.cfg.limits.joints_deg, box_mm)
+
+    def _restart(self, robot: Path, tool: Path | None) -> None:
+        """Switch robot / end effector: remember the choice, start a fresh Botswain, close this one."""
+        write_selection(robot, tool)
+        self._log("info", f"restarting with {robot.name}" + (f" and {tool.name}" if tool else ""))
+        QProcess.startDetached(sys.executable, ["-m", "botswain"], str(ROOT))
+        self.close()
 
     def _box_toggled(self, on: bool) -> None:
         self.worker.gate.box_enabled = on

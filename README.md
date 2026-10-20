@@ -30,10 +30,11 @@ Needs Windows and Python 3.12.
 ```
 py -3.12 -m venv .venv
 .venv\Scripts\python -m pip install -e .[dev]
-.venv\Scripts\python -m botswain --robot robots/fake.yaml
+.venv\Scripts\python -m botswain
 ```
 
-That opens the app with a **fake robot** (no hardware). Press **Connect**, then **Enable**, then jog.
+The first time it opens the **fake robot** (no hardware). Press **Connect**, then **Enable**, then jog. Pick the
+real robot and its end effector on the **Settings** page; Botswain remembers the choice.
 
 **From VS Code:** open the folder, go to Run and Debug (Ctrl+Shift+D), pick a configuration and press F5:
 
@@ -53,16 +54,35 @@ That opens the app with a **fake robot** (no hardware). Press **Connect**, then 
 
 ## Using it
 
-### 1. Pick the robot
-Each robot has a YAML file in `robots/` with its address and safety limits.
+### 1. Pick the robot and the end effector
+**Settings** page: a **Robot** dropdown and an **End effector** dropdown, then **Save & restart** (only while
+disconnected; every page is rebuilt for the new robot). **Load … config** adds a config file from anywhere.
 
-| File | Talks to |
+Each robot and each end effector is a config file (YAML), its "ID card":
+
+| Robot (`configs/robots/`) | Talks to |
 |---|---|
-| `fake.yaml` | a fake robot inside the app (real CR5 kinematics, no network) |
-| `dobot_cr5_fake.yaml` | the fake Dobot controller on this laptop (start it first, see [Development](#development)) |
-| `dobot_cr5.yaml` | the lab CR5 at 192.168.5.1 |
+| `fake.yaml` | a fake robot inside the app (real CR5 kinematics, a pretend DH gripper, no network) |
+| `dobot_cr5_fake_controller.yaml` | the fake Dobot controller on this laptop (start it first, see [Development](#development)) |
+| `dobot_cr5.yaml` | the lab CR5 at 192.168.5.1 (controller 3.5.x: protocol `dobot_v3`) |
 
-Without `--robot` the app opens the robot you used last.
+| End effector (`configs/tools/`) | |
+|---|---|
+| `dh_pge_50_26.yaml` | DH-Robotics PGE-50-26 on the arm's RS485 tool port (driver `dh_modbus`) |
+
+A robot config says which **protocol** talks to the arm, its address and named ports, its model file (URDF),
+which **tool port** it offers, its limits and home. An end-effector config says which **driver** talks to it and
+which kind of port it needs; Settings refuses a gripper the robot has no port for.
+
+The right half of Settings edits **this lab's** values for the running robot: IP and ports, speed cap,
+controller speed, and the **safety box**. They are saved to `<robot>.local.yaml` next to the config (the shared,
+commented config file is never rewritten; delete the `.local.yaml` to go back).
+
+**Teach the safety box:** move the tool to one corner of the table area (jog, drag or teleop), **Add corner**, then
+the opposite corner, **Add corner**, set a margin, **Fit box**, **Apply & save box**. It applies at once. The box
+limits the tool point, not the elbow.
+
+From a terminal, `--robot <config>` and `--tool <config>` pick for one run without changing the saved choice.
 
 ### 2. Connect, check, enable
 1. **Connect** opens the links and reads the state. It never enables the robot.
@@ -114,7 +134,7 @@ Every clamp and refusal is written to the log and counted in the status bar.
 
 ### 7. Saved points
 **Save point** (toolbar) or **Save current pose** (Points page) stores the pose and joints in
-`robots/<robot>.points.json`. **Go to** (or double-click) moves there with a joint move through the gate.
+`configs/robots/<robot>.points.json`. **Go to** (or double-click) moves there with a joint move through the gate.
 
 **Home** (toolbar, or the Jog page next to Frame) is a joint move to `home_joints_deg`; it stays greyed out until the
 robot YAML says `home_confirmed: true`.
@@ -238,14 +258,16 @@ state ─> GUI (30 Hz), 3D view, recorder (with cameras, on one clock)
 
 ```
 botswain/
-  core/       types, clock, robot YAML loading, kinematics, logging
-  drivers/    driver contract, fake robot, dobot/ (commands, dashboard, feedback, gripper, fake controller)
+  core/       types, clock, robot + end-effector config loading, kinematics, logging
+  drivers/    arm driver contract, registry, fake robot, dobot/ (dialects V3/V4, dashboard, feedback,
+              tool port, fake controller)
+  tools/      end-effector drivers: contract, DH Modbus gripper, pretend DH bus
   control/    worker thread, safety gate, Doctor, saved points, Blocks program runner
   teleop/     phone server, phone-to-robot mapping, game controller
   sensors/    cameras
   record/     recorder, LeRobot writer, recording session
   ui/         main window, toolbar, pages, widgets, theme
-robots/       one YAML per robot
+configs/      robots/ and tools/: one config per robot and per end effector (+ .local.yaml lab edits, points)
 assets/       CR5 URDF + meshes, fonts
 tests/        one test file per module (pytest)
 ```
@@ -269,11 +291,20 @@ be tested at home:
 .venv\Scripts\python -m botswain.drivers.dobot.fake_controller
 ```
 
-Then run the app with `robots/dobot_cr5_fake.yaml`. In its window, type a key and Enter: `p` pause feedback,
+Then pick **Dobot CR5 (fake controller)** in Settings (or run with
+`--robot configs/robots/dobot_cr5_fake_controller.yaml`). It acts as a V3 controller like the lab CR5
+(`--v4` for a V4 one). In its window, type a key and Enter: `p` pause feedback,
 `a` alarm, `s` split packets, `g` garbage bytes, `t` leave TCP mode.
 
-**Adding a robot:** write `botswain/drivers/<brand>.py` implementing the contract in
-`botswain/drivers/base.py`, register it in `drivers/registry.py`, add a YAML in `robots/`.
+**Adding a robot:**
+- Same protocol as one Botswain knows (any Dobot CR / CRA / Nova): copy a config in `configs/robots/`, change the
+  name, address, URDF and limits. Nothing else.
+- A new vendor: write one driver (`botswain/drivers/<brand>/`) implementing `botswain/drivers/base.py`, add one
+  line to `PROTOCOLS` in `drivers/registry.py`, then a config. Every robot of that vendor is a config after that.
+- If the arm carries end effectors, its driver returns a tool port from `tool_port()` (e.g. RS485 bytes).
+
+**Adding an end effector:** same driver (another DH model): a config in `configs/tools/`. A new kind: a driver in
+`botswain/tools/` implementing `botswain/tools/base.py`, one line in `TOOLS` (`botswain/tools/__init__.py`).
 
 ---
 

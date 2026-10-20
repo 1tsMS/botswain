@@ -1,0 +1,19 @@
+# Fake robot: pure Python, no network. CR5 kinematics and limits, so the GUI behaves the same.
+# Its tool port has a pretend DH gripper on it, so the real gripper driver runs at home too.
+name: Fake CR5
+vendor: Botswain
+model: fake (CR5 kinematics)
+protocol: fake
+urdf: ../../assets/dobot_cr5/cr5_robot.urdf
+tool_port: rs485
+limits:
+  speed_cap_pct: 100
+  box_enabled: false
+  box_mm: {x: [-632, -332], y: [-286, 14], z: [334, 634]}
+  joints_deg: [[-360, 360], [-360, 360], [-160, 160], [-360, 360], [-360, 360], [-360, 360]]
+  max_tcp_speed_mm_s: 150
+  max_step_deg: 2.0
+  teleport_mm: 80
+  stale_ms: 200
+stream: {period_s: 0.03, aheadtime: 50, gain: 500}
+home: {joints_deg: [0, 0, 90, 0, -90, 0], confirmed: true}  # nothing to hit on a fake robot

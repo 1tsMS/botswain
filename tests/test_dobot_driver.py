@@ -158,15 +158,6 @@ def test_stream_target_uses_servo_p(ctrl, drv):
     assert drv.read_state().mode is not Mode.STREAMING
 
 
-def test_gripper_frames_reach_controller(ctrl, drv):
-    connected(drv)
-    drv.gripper(True)
-    drv.gripper(False)
-    writes = [f for f in ctrl.gripper_frames if f[1] == 0x06]  # reads (03) are the status poll
-    assert writes == [[1, 6, 1, 0, 0, 1, 73, 246], [1, 6, 1, 3, 3, 232, 120, 136], [1, 6, 1, 3, 0, 0, 120, 54]]
-    assert drv.read_state().gripper == 0.0
-
-
 def test_stop_raises_when_link_is_dead(ctrl, drv):
     connected(drv)
     ctrl.stop()

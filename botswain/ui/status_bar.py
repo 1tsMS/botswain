@@ -26,9 +26,12 @@ class StatusBar(QStatusBar):
         for w in (self.link, self.hz, self.latency, self.frame, self.box):
             self.addWidget(w)
         self.addPermanentWidget(self.dataset)
-        spans = [hi - lo for lo, hi in cfg.limits.box_mm]
-        self._box_text = "×".join(f"{s:g}" for s in spans) + " mm"
+        self.set_box(cfg.limits.box_mm)
         self.set_state(RobotState.disconnected(cfg.dof), {}, "base", None)
+
+    def set_box(self, box_mm: tuple[tuple[float, float], ...]) -> None:
+        spans = [hi - lo for lo, hi in box_mm]
+        self._box_text = "×".join(f"{s:g}" for s in spans) + " mm"
 
     def set_dataset(self, path: str | None) -> None:
         self.dataset.setText(f"Dataset {_num(path or '–')}")

@@ -1,0 +1,11 @@
+# DH-Robotics PGE-50-26 electric parallel gripper (lab CR5). Modbus RTU over the arm's RS485 tool port.
+# Registers from DH's own driver (DH-Robotics/dh_gripper_ros); see botswain/tools/dh_modbus.py.
+name: DH PGE-50-26
+vendor: DH-Robotics
+model: PGE-50-26
+driver: dh_modbus
+port: rs485
+params: {slave: 1, baud: 115200}
+force_range_pct: [20, 100]  # DH manual; PGE-50-26 grips about 15-50 N per jaw over this range
+mass_kg: null  # [ ] fill in from the datasheet: the controller's payload must match for drag and collision
+tcp_offset_mm: null  # [ ] measure the fingertip from the flange, so the safety box protects the fingers

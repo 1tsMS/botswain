@@ -49,7 +49,7 @@ Rules that never change:
 |---|---|
 | `__main__.py`, `app.py` | Start the app: read the robot YAML, build driver, gate, worker and window |
 | `core/types.py` | The shared vocabulary: Pose, Joints, robot Mode and every command (JogStep, MoveTo, Stop...) |
-| `core/config.py` | Read `robots/*.yaml`; refuse anything missing or wrong, never fall back to wide defaults |
+| `core/config.py` | Read `configs/robots/*.yaml` and `configs/tools/*.yaml` (+ `.local.yaml` lab edits); refuse anything missing or wrong, never fall back to wide defaults |
 | `core/kinematics.py` | Math from the URDF: joint angles to tool pose (forward kinematics) and back (inverse kinematics) |
 | `core/clock.py` | The single stopwatch every sample is stamped with |
 | `control/worker.py` | The waiter: command queue, STOP lane, hold-jog watchdog, teleop streaming |
@@ -65,7 +65,7 @@ Rules that never change:
 | `sensors/cameras.py` | One background thread per camera, keeps the newest picture and its time |
 | `record/` | Recording datasets |
 | `ui/` | Everything on screen: window, toolbar, pages, 3D view, theme |
-| `robots/` | One YAML per robot: address and safety limits |
+| `configs/` | One config per robot (protocol, address, model, limits) and per end effector (driver, port) |
 | `assets/` | CR5 3D model (URDF + meshes) and fonts |
 | `tests/` | Automatic checks, one file per module |
 

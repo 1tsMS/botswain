@@ -3,11 +3,11 @@
 import time
 
 import pytest
-from helpers import ROBOTS
+from helpers import DH_TOOL, ROBOTS
 from PySide6.QtCore import Qt
 
 from botswain.app import build
-from botswain.core.config import load_robot_config
+from botswain.core.config import load_robot_config, load_tool_config
 from botswain.core.types import (
     Connect,
     Enable,
@@ -26,7 +26,8 @@ from botswain.core.types import (
 
 @pytest.fixture
 def rig(qtbot, tmp_path):
-    worker, w = build(load_robot_config(ROBOTS / "fake.yaml"), view_3d=False)
+    worker, w = build(load_robot_config(ROBOTS / "fake.yaml"), view_3d=False,
+                     tool_cfg=load_tool_config(DH_TOOL))
     qtbot.addWidget(w)
     w.points.path = tmp_path / "points.json"  # keep test points out of robots/
     w.points._points.clear()  # ignore points saved by hand in robots/fake.points.json

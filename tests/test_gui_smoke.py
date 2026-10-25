@@ -239,3 +239,40 @@ def _vr_init_on(port, real_init):
         real_init(self, session, port=port, host=host, **kwargs)
 
     return init
+
+
+def test_headset_home_is_a_dead_man_and_box_button_switches_the_gate(qtbot, make_window):
+    from botswain.core.types import Joints, MoveTo
+
+    worker, w = make_window()
+    ready(qtbot, worker)
+    worker.submit(MoveTo(Joints((30, 10, 80, 0, -60, 20)), "joint"))  # somewhere away from home
+    qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.IDLE and abs(worker.latest_state().joints.values[0] - 30) < 0.5,
+                    timeout=8000)
+    page = w.teleop_page
+    page._vr_ui.emit("home", True)  # trigger held on HOME
+    qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.MOVING, timeout=2000)
+    page._vr_ui.emit("home", False)  # let go halfway
+    qtbot.waitUntil(lambda: worker.latest_state().mode is Mode.IDLE, timeout=2000)
+    assert worker.latest_state().joints.values[0] > 0.5  # stopped short of home (J1 = 0)
+    box_before = worker.gate.box_enabled
+    page._vr_ui.emit("box", True)
+    qtbot.waitUntil(lambda: worker.gate.box_enabled is not box_before, timeout=1000)
+    assert w.jog_page.robot_view.box_chip.isChecked() is worker.gate.box_enabled  # the laptop shows it too
+
+
+def test_headset_record_and_discard_buttons_drive_the_episode_bar(qtbot, make_window, monkeypatch):
+    _, w = make_window()
+    calls = []
+    monkeypatch.setattr(w.episode_bar, "start", lambda: calls.append("start"))
+    monkeypatch.setattr(w.episode_bar, "save", lambda: calls.append("save"))
+    monkeypatch.setattr(w.episode_bar, "discard", lambda: calls.append("discard"))
+    page = w.teleop_page
+    page._vr_ui.emit("record", True)
+    monkeypatch.setattr(type(w.episode_bar), "recording", property(lambda self: True))
+    page._vr_ui.emit("record", True)  # second press while recording = save
+    page._vr_ui.emit("discard", True)
+    qtbot.waitUntil(lambda: len(calls) == 3, timeout=1000)
+    assert calls == ["start", "save", "discard"]
+    status = w._recording_status()
+    assert status is None or set(status) == {"on", "frames", "saved"}

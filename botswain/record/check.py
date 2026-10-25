@@ -5,6 +5,8 @@
 Reads the LeRobot v3 files directly (meta/info.json, data/*.parquet, meta/tasks.parquet) with pandas, so it
 needs no torch. Per episode: frames, length, how often the robot state really changed, which input drove the
 arm, how far the TCP travelled, the largest gap between commanded and measured position, and bad numbers.
+Plus the three faults found in the first lab datasets: time warp (real time vs frames / fps), stale actions on
+frames no input drives, and 360 deg angle jumps. Tips (idle at the ends, too few episodes) don't fail a check.
 """
 
 from __future__ import annotations
@@ -19,6 +21,11 @@ import numpy as np
 import pandas as pd
 
 FPS_TOLERANCE = 0.12  # state updates may run this much off the dataset fps before it is a problem
+TIME_TOLERANCE = 0.05  # the episode's real duration may differ this much from frames / fps
+STALE_ACTION_MM = 5.0  # on a frame no input drives, the action must be (about) where the arm is
+ANGLE_JUMP_DEG = 90.0  # no real motion turns this much in one frame: it is a +-180 wrap
+IDLE_TIP_S = 3.0
+EPISODES_TIP = 20  # ACT-style policies want about 50 demonstrations per task
 
 
 class CheckError(Exception):
@@ -38,6 +45,11 @@ class EpisodeReport:
     travel_mm: float  # measured TCP path length
     max_gap_mm: float  # largest |commanded - measured| TCP distance while an input drove the arm
     bad_values: int  # NaN / inf in a pose or joint value (gripper NaN = no gripper reading / command yet)
+    real_seconds: float = 0.0  # first to last state arrival: what the frames really span
+    idle_gap_mm: float = 0.0  # largest |action - measured| on frames no input drives (should be ~0)
+    angle_jump_deg: float = 0.0  # largest frame-to-frame change of Rx Ry Rz (state or action)
+    idle_start_s: float = 0.0
+    idle_end_s: float = 0.0
 
 
 @dataclass
@@ -47,6 +59,7 @@ class DatasetReport:
     cameras: list[str]
     episodes: list[EpisodeReport] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
+    tips: list[str] = field(default_factory=list)
 
 
 def _legend(info: dict) -> dict[int, str]:
@@ -85,6 +98,10 @@ def check_dataset(root: Path | str) -> DatasetReport:
         e = _episode(int(ep), d.sort_values("frame_index"), fps, legend, task_of)
         report.episodes.append(e)
         report.problems += [f"episode {e.index} ({e.task}): {p}" for p in _problems(e, fps, legend)]
+        report.tips += [f"episode {e.index}: {t}" for t in _tips(e)]
+    if len(report.episodes) < EPISODES_TIP:
+        report.tips.append(f"{len(report.episodes)} episode(s): fine to check recording, but train on about 50 "
+                           f"per task (and per input method)")
     return report
 
 
@@ -106,6 +123,9 @@ def _episode(ep: int, d: pd.DataFrame, fps: int, legend: dict[int, str], task_of
     driven = {k: v for k, v in sources.items() if k != "none"}
     driving = codes != 0
     gaps = np.linalg.norm(action[:, :3] - tcp, axis=1)
+    rot = np.concatenate([state[:, -4:-1], action[:, 3:6]], axis=1)  # Rx Ry Rz of state and of action
+    jumps = np.abs(np.diff(rot, axis=0))
+    moved = np.flatnonzero(driving)
     return EpisodeReport(
         index=ep, task=task_of.get(int(d["task_index"].iloc[0]), "?"), frames=len(d), seconds=len(d) / fps,
         real_fps=float(1e9 / np.median(fresh)) if len(fresh) else 0.0,
@@ -114,6 +134,11 @@ def _episode(ep: int, d: pd.DataFrame, fps: int, legend: dict[int, str], task_of
         travel_mm=float(np.sum(np.linalg.norm(np.diff(tcp, axis=0), axis=1))),
         max_gap_mm=float(gaps[driving].max()) if driving.any() else 0.0,
         bad_values=int(np.sum(~np.isfinite(state[:, :-1])) + np.sum(~np.isfinite(action[:, :-1]))),
+        real_seconds=float((t_state[-1] - t_state[0]) / 1e9) if len(d) > 1 else 0.0,
+        idle_gap_mm=float(gaps[~driving].max()) if (~driving).any() else 0.0,
+        angle_jump_deg=float(np.nanmax(jumps)) if len(jumps) else 0.0,
+        idle_start_s=(moved[0] if len(moved) else len(d)) / fps,
+        idle_end_s=(len(d) - 1 - moved[-1] if len(moved) else 0) / fps,
     )
 
 
@@ -129,6 +154,23 @@ def _problems(e: EpisodeReport, fps: int, legend: dict[int, str]) -> list[str]:
         out.append("the arm did not move (under 1 mm)")
     if legend and e.main_source == "none" and e.travel_mm >= 1.0:
         out.append("the arm moved but no input is tagged as driving it")
+    span = (e.frames - 1) / fps
+    if e.frames > fps and abs(e.real_seconds - span) > TIME_TOLERANCE * span:
+        out.append(f"time warp: frames say {span:.1f} s but they really span {e.real_seconds:.1f} s "
+                   f"(the recorder fell behind and skipped slots)")
+    if e.idle_gap_mm > STALE_ACTION_MM:
+        out.append(f"stale action: {e.idle_gap_mm:.0f} mm between action and arm on frames no input drives")
+    if e.angle_jump_deg > ANGLE_JUMP_DEG:
+        out.append(f"angle jump of {e.angle_jump_deg:.0f} deg between two frames (a +-180 wrap)")
+    return out
+
+
+def _tips(e: EpisodeReport) -> list[str]:
+    out = []
+    if e.idle_start_s > IDLE_TIP_S:
+        out.append(f"{e.idle_start_s:.0f} s before the arm first moves: start recording when you are ready")
+    if e.idle_end_s > IDLE_TIP_S:
+        out.append(f"{e.idle_end_s:.0f} s after the last motion: save right after the task is done")
     return out
 
 
@@ -143,6 +185,8 @@ def format_report(r: DatasetReport) -> str:
                      f"{e.max_gap_mm:>6.1f}mm  {by:<22}  {e.task}")
     lines += ["", "problems:" if r.problems else "no problems found"]
     lines += [f"  - {p}" for p in r.problems]
+    if r.tips:
+        lines += ["", "tips:"] + [f"  - {t}" for t in r.tips]
     return "\n".join(lines)
 
 

@@ -49,9 +49,9 @@ def test_deadman_starts_at_the_measured_pose_then_integrates(worker):
     first = t.step(pad("lb", ly=1.0), 0.02)
     assert first.hold and first.pose.as_list() == pytest.approx(start.as_list())
     nxt = t.step(pad("lb", ly=1.0), 0.02)  # full stick forward: 100 mm/s for 20 ms
-    assert nxt.pose.x - start.x == pytest.approx(2.0, abs=1e-6)
+    assert nxt.pose.x - start.x == pytest.approx(-2.0, abs=1e-6)  # stick up = robot -X
     slow = t.step(pad("lb", "rb", ly=1.0), 0.02)  # RB: quarter speed
-    assert slow.pose.x - nxt.pose.x == pytest.approx(0.5, abs=1e-6)
+    assert slow.pose.x - nxt.pose.x == pytest.approx(-0.5, abs=1e-6)
     up = t.step(pad("lb", rt=1.0), 0.02)
     assert up.pose.z - slow.pose.z == pytest.approx(2.0, abs=1e-6)
 
@@ -62,7 +62,7 @@ def test_release_stops_and_lead_is_capped(worker):
     start = worker.latest_state().tcp
     t.step(pad("lb"), 0.02)
     far = t.step(pad("lb", ly=1.0), 10.0)  # a huge dt would mean 1 m; the target may lead by 30 mm only
-    assert far.pose.x - start.x == pytest.approx(MAX_LEAD_MM, abs=1e-6)
+    assert far.pose.x - start.x == pytest.approx(-MAX_LEAD_MM, abs=1e-6)
     release = t.step(pad(ly=1.0), 0.02)
     assert release is not None and not release.hold and not t.active
 
@@ -100,7 +100,7 @@ def test_fake_robot_follows_the_stick(worker):
     try:
         x0 = worker.latest_state().tcp.x
         state["pad"] = pad("lb", ly=1.0)
-        assert wait_for(lambda: worker.latest_state().tcp.x > x0 + 20, timeout=2.0)
+        assert wait_for(lambda: worker.latest_state().tcp.x < x0 - 20, timeout=2.0)
         assert worker.latest_state().mode is Mode.STREAMING
         state["pad"] = pad()  # let go of LB
         assert wait_for(lambda: worker.latest_state().mode is Mode.IDLE, timeout=1.0)
@@ -116,3 +116,12 @@ def test_unplugged_pad_releases(worker):
     t.step(pad("lb"), 0.02)
     out = t.step(PadState(False), 0.02)
     assert out is not None and not out.hold
+
+
+
+def test_stick_right_is_robot_plus_y(worker):
+    t = GamepadTeleop(worker, lambda: PadState(False))
+    t.speed_scale = 1.0
+    start = t.step(pad("lb", lx=1.0), 0.02).pose
+    nxt = t.step(pad("lb", lx=1.0), 0.02).pose  # full stick right: 100 mm/s for 20 ms
+    assert nxt.y - start.y == pytest.approx(2.0, abs=1e-6) and nxt.x == pytest.approx(start.x, abs=1e-6)

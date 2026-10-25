@@ -9,7 +9,11 @@ grip-space pose (the palm, not the pointing ray) with the buttons over the webso
     {"type": "calib", "op": "place", "pos": [x,y,z], "quat": [x,y,z,w]}  tool tip here, base where it points
     {"type": "calib", "op": "set", "matrix": [16 floats, row-major]}   the pose the left hand dragged it to
     {"type": "calib", "op": "reset"}
-    {"type": "log", "text": "..."}                                      a page error, written to Botswain's log
+    {"type": "log", "text": "...", "level": "error" | "info"}           written to Botswain's log
+    {"type": "ui", "action": "home", "held": bool}                    controls window HOME (hold = go, let go = stop)
+    {"type": "ui", "action": "box"}                                   controls window SAFETY BOX on / off
+    {"type": "ui", "action": "record"}                                controls window RECORD: start, or save the episode
+    {"type": "ui", "action": "discard"}                               controls window DISCARD (held 1 s on the page)
 Placing (left trigger held): the page first asks for "place" (a starting pose) if there is none, then drags the
 outline with the controller live and sends "set" when the trigger is let go.
 Positions are WebXR local-floor (x right, y up, z back), like the phone, so TeleopMapper is reused as is.
@@ -400,8 +404,14 @@ class VrServer(PairedServer):
 
     def __init__(self, session: VrSession, port: int = PORT, host: str = "0.0.0.0", urdf: Path | None = None,
                  tool_offset_mm: Sequence[float] | None = None,
-                 cameras: Callable[[], list] = list) -> None:
+                 cameras: Callable[[], list] = list, on_ui: Callable[[str, bool], None] | None = None,
+                 home_ready: bool = False, recording: Callable[[], dict | None] | None = None) -> None:
+        """on_ui(action, held): the controls window's buttons. Called on the server thread: the GUI side must hop to
+        its own thread (TeleopPage does, with a queued signal). home_ready: the robot YAML has a confirmed home."""
         self.session = session
+        self.on_ui = on_ui
+        self.home_ready = home_ready
+        self.recording = recording  # -> {"on", "frames", "saved"} for the headset, None = recording unavailable
         self.worker = session.worker
         self.samples = 0
         self.bad_messages = 0
@@ -417,7 +427,7 @@ class VrServer(PairedServer):
         if urdf is not None and urdf.exists():
             self._load_model(urdf)
         super().__init__(PAGE.read_text(encoding="utf-8"), self._handle, port, host, path="/", tab="VR",
-                         on_disconnect=session.on_disconnect, require_key=False, one_client=True,
+                         on_disconnect=self._disconnected, require_key=False, one_client=True,
                          outgoing=self.status_text, outgoing_hz=STATUS_HZ)
         self._add_routes()
 
@@ -490,7 +500,10 @@ class VrServer(PairedServer):
                 self._calib(msg)
                 return
             if kind == "log":
-                self._page_log(str(msg.get("text", "")))
+                self._page_log(str(msg.get("text", "")), msg.get("level") == "info")
+                return
+            if kind == "ui":
+                self._ui(msg)
                 return
             if kind != "vr":
                 return
@@ -501,12 +514,30 @@ class VrServer(PairedServer):
         self.samples += 1
         self.session.on_sample(sample)
 
-    def _page_log(self, text: str) -> None:
-        """Errors from the headset page (it has no console you can read). At most one a second."""
+    def _page_log(self, text: str, info: bool = False) -> None:
+        """From the headset page (it has no console you can read). Errors at most one a second; notes (re-centres,
+        anchor corrections) are rare events the page throttles itself."""
+        if info:
+            log.info("VR page: %s", text[:400])
+            return
         t = now_ns()
         if t - self._page_log_ns >= 1_000_000_000:
             self._page_log_ns = t
             log.warning("VR page error: %s", text[:800])
+
+    def _ui(self, msg: dict) -> None:
+        action = msg.get("action")
+        if action not in ("home", "box", "record", "discard"):
+            raise ValueError(f"unknown ui action {action!r}")
+        held = bool(msg.get("held", True))
+        log.info("VR controls window: %s%s", action, "" if action != "home" else (" pressed" if held else " released"))
+        if self.on_ui is not None:
+            self.on_ui(action, held)
+
+    def _disconnected(self) -> None:
+        self.session.on_disconnect()
+        if self.on_ui is not None:
+            self.on_ui("home", False)  # a HOME hold ends with the page: the arm must not keep driving home
 
     def _calib(self, msg: dict) -> None:
         try:
@@ -549,6 +580,8 @@ class VrServer(PairedServer):
             "calib": {"matrix": None if cal.matrix is None else _rows(cal.matrix), "points": len(cal.base_points),
                       "note": cal.note},
             "cams": [c.name for c in self.cameras()[:MAX_CAMS]],
+            "home_ready": self.home_ready,
+            "rec": self.recording() if self.recording is not None else None,
         }
 
     def status_text(self) -> str | None:

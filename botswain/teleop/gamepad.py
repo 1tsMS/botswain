@@ -5,7 +5,7 @@ X-input / D-input switch (Cosmic Byte and similar) must be in X-input mode.
 
 Mapping (robot base frame, turned by the same "facing" setting as the phone):
   hold LB      deadman: the arm moves only while it is held; release = stop
-  left stick   X / Y          triggers    RT up, LT down (Z)
+  left stick   up = -X, right = +Y (MS's lab stance)   triggers   RT up, LT down (Z)
   right stick  Rz (x), Ry (y)  RB          slow mode (x0.25)
   A            gripper open/close toggle   D-pad up/down   speed +/-10 %
   Start        record: start or save episode   Back   discard episode   X   save point
@@ -168,7 +168,9 @@ class GamepadTeleop:
             self._target = measured
             return StreamTarget(matrix_to_pose(self._target), now_ns(), "gamepad", True)
         gain = self.speed_scale * (0.25 if "rb" in pad.buttons else 1.0)
-        v = self.remap @ np.array([pad.ly, -pad.lx, pad.rt - pad.lt]) * self.max_lin_mm_s * gain
+        # Stick up = robot -X, right = +Y: how the CR5 sits in front of the operator in the lab (MS, 2026-10-25).
+        # The Mapping panel's facing setting still turns this for other stances.
+        v = self.remap @ np.array([-pad.ly, pad.lx, pad.rt - pad.lt]) * self.max_lin_mm_s * gain
         t = self._target.copy()
         t[:3, 3] += v * dt
         lead = t[:3, 3] - measured[:3, 3]

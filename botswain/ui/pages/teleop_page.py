@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QGridLayout,
@@ -38,7 +38,7 @@ INPUTS = ("Phone", "Game controller", "VR headset")
 
 PHONE_KEYS = [("Hold button", "move the arm (let go = stop)"), ("Gripper button", "gripper open / close"),
               ("Scale slider", "the phone's own motion scale")]
-PAD_KEYS = [("LB (hold)", "move the arm (let go = stop)"), ("Left stick", "X / Y"), ("RT / LT", "Z up / down"),
+PAD_KEYS = [("LB (hold)", "move the arm (let go = stop)"), ("Left stick", "up = robot -X, right = robot +Y"), ("RT / LT", "Z up / down"),
             ("Right stick", "Rz / Ry"), ("RB", "slow mode (quarter speed)"), ("A", "gripper open / close"),
             ("D-pad up / down", "speed +/- 10 %"), ("Start", "recording: start, or save the episode"),
             ("Back", "discard the episode"), ("X", "save the current pose as a point")]
@@ -96,10 +96,23 @@ def _two_columns(left: list[QWidget], right: list[QWidget]) -> QWidget:
 
 
 class TeleopPage(QWidget):
+    _vr_ui = Signal(str, bool)  # from the VR server's thread to the GUI thread (queued)
+
     def __init__(self, worker: RobotWorker, log: Callable[[str, str], None], parent: QWidget | None = None,
                  urdf: Path | None = None, tool_offset_mm: Sequence[float] | None = None,
-                 cameras: Callable[[], list] = list) -> None:
+                 cameras: Callable[[], list] = list, home: Callable[[], None] | None = None,
+                 toggle_box: Callable[[], None] | None = None, record: Callable[[], None] | None = None,
+                 discard: Callable[[], None] | None = None,
+                 recording: Callable[[], dict | None] | None = None) -> None:
+        """home / toggle_box: the main window's own Home and safety-box switch, used by the headset's buttons."""
         super().__init__(parent)
+        self._home = home
+        self._toggle_box = toggle_box
+        self._record = record  # start an episode, or save the running one (the toolbar's Record)
+        self._discard = discard
+        self._recording = recording
+        self._vr_homing = False
+        self._vr_ui.connect(self._on_vr_ui)
         self.worker = worker
         self._log = log
         self._urdf = urdf  # the headset draws the robot's outline from it
@@ -259,7 +272,8 @@ class TeleopPage(QWidget):
     def toggle_vr(self) -> None:
         if self.vr_server is None:
             server = VrServer(self.vr_session, urdf=self._urdf, tool_offset_mm=self._tool_offset_mm,
-                              cameras=self._cameras)
+                              cameras=self._cameras, on_ui=self._vr_ui.emit, home_ready=self._home is not None,
+                              recording=self._recording)
             try:
                 server.start()
             except RuntimeError as e:
@@ -275,6 +289,31 @@ class TeleopPage(QWidget):
             self.vr_session.on_disconnect()
             self._stop_if_streaming()
             self._log("info", "VR server stopped")
+
+    def _on_vr_ui(self, action: str, held: bool) -> None:
+        """The headset's controls window. HOME is a dead-man: the arm drives home only while the trigger is held
+        on the button; letting go (or pointing away, or the page dropping) stops it."""
+        if action == "box":
+            if self._toggle_box is not None:
+                self._toggle_box()
+            return
+        if action == "record":
+            if self._record is not None:
+                self._record()
+            return
+        if action == "discard":
+            if self._discard is not None:
+                self._discard()
+            return
+        if held and self._home is not None:
+            self._vr_homing = True
+            self._log("info", "VR: going home (let go of the trigger to stop)")
+            self._home()
+        elif not held and self._vr_homing:
+            self._vr_homing = False
+            if self.worker.latest_state().mode is Mode.MOVING:
+                self.worker.request_stop()
+                self._log("info", "VR: home stopped (trigger let go)")
 
     # ---- shared ----
 

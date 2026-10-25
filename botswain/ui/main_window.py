@@ -99,9 +99,14 @@ class MainWindow(QMainWindow):
         home = cfg.home_joints_deg if cfg.home_confirmed else None
         self.runner = ProgramRunner(worker, self.points, home, log_cb=self._log)
         self.points_page = PointsTable(self.points, cfg, self.runner, self._submit, self._log, save=self._save_point)
+        home_ok = cfg.home_confirmed and cfg.home_joints_deg is not None
         self.teleop_page = TeleopPage(worker, self._log, urdf=cfg.model_urdf,
                                       tool_offset_mm=tool_cfg.tcp_offset_mm if tool_cfg else None,
-                                      cameras=lambda: self.cameras_page.cameras)
+                                      cameras=lambda: self.cameras_page.cameras,
+                                      home=self._home if home_ok else None,
+                                      toggle_box=lambda: self.jog_page.robot_view.box_chip.toggle(),
+                                      record=self._record_clicked, discard=lambda: self.episode_bar.discard(),
+                                      recording=self._recording_status)
         self.cameras_page = CamerasPage(self._log)
         self.blocks_page = BlocksPage(self.runner, lambda: [p.name for p in self.points.all()], self._log)
         self.settings_page = SettingsPage(cfg, tool_cfg, worker, self._log, switch=self._switch,
@@ -224,6 +229,7 @@ class MainWindow(QMainWindow):
 
     def _box_toggled(self, on: bool) -> None:
         self.worker.gate.box_enabled = on
+        self.settings_page.remember_box_enabled(on)  # survives a restart, wherever it was switched
         self._log("info" if on else "warn", "safety box ON: steps clamp at the walls, moves outside are refused"
                   if on else "safety box OFF: only joint limits and the speed cap protect the arm")
 
@@ -275,6 +281,13 @@ class MainWindow(QMainWindow):
             self.episode_bar.discard()
         elif name == "x":
             self._save_point()
+
+    def _recording_status(self) -> dict | None:
+        """For the headset (read on the VR server's thread: plain attributes, no widgets)."""
+        session = self.episode_bar.session if hasattr(self, "episode_bar") else None
+        if session is None:
+            return None
+        return {"on": session.recording, "frames": session.frames, "saved": session.episodes_saved}
 
     def _record_clicked(self) -> None:
         """Toolbar Record: start an episode, or save the running one. Details live in the Episodes tab."""

@@ -137,3 +137,20 @@ def test_load_swaps_the_window_in_the_same_app(qtbot, tmp_path, monkeypatch):
     assert second.isVisible() and second.cfg.name == "Dobot CR5 (fake controller)"
     assert second.tool_cfg is None and not second.jog_page.gripper_open_btn.isVisibleTo(second)
     second.close()
+
+
+def test_switching_the_box_off_and_on_survives_a_restart(qtbot, rig):
+    """MS: once a box is saved and applied, the next start must have the same box, switched the same way."""
+    worker, w, page, path, _ = rig
+    page.save_box_values(((-500.0, 400.0), (-300.0, 350.0), (100.0, 600.0)), enabled=True)
+    w.jog_page.robot_view.box_chip.setChecked(False)  # switched off in the Robot view (or the VR button)
+    assert not worker.gate.box_enabled and not page.box_on.isChecked()
+    after = load_robot_config(path)  # what the next start loads
+    assert after.limits.box_mm == ((-500.0, 400.0), (-300.0, 350.0), (100.0, 600.0)) and after.limits.box_enabled is False
+    w.jog_page.robot_view.box_chip.setChecked(True)
+    assert load_robot_config(path).limits.box_enabled is True
+    worker2, w2 = build(load_robot_config(path), view_3d=False)  # a fresh start
+    qtbot.addWidget(w2)
+    assert worker2.gate.box_enabled and worker2.gate.limits.box_mm == after.limits.box_mm
+    assert w2.jog_page.robot_view.box_chip.isChecked()
+    w2.close()

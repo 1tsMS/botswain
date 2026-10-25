@@ -37,6 +37,9 @@
     <tr><td>Trigger</td><td>gripper: pull to close, let go to open</td></tr>
     <tr><td>A / B</td><td>motion scale - / + 10 %</td></tr>
     <tr><td>Stick click</td><td>wrist rotation on / off</td></tr>
+    <tr><td>Aim + trigger</td><td>buttons on the controls window: HOME (hold; let go = stop), SAFETY BOX on / off,
+      RECORD (start / save the episode), DISCARD (hold 1 s).
+      The gripper keeps its grip while you aim at them.</td></tr>
   </table>
   <h2>Left hand: set up</h2>
   <table>
@@ -104,6 +107,8 @@ function report(error) {
 window.addEventListener("error", (e) => report(e.error || e.message));
 window.addEventListener("unhandledrejection", (e) => report(e.reason));
 
+function note(text) { command({ type: "log", level: "info", text }); }
+
 function send(msg) {
   // Drop instead of queueing: an old pose sent late is worse than a skipped one.
   if (ws && ws.readyState === 1 && ws.bufferedAmount < 4096) ws.send(JSON.stringify(msg));
@@ -168,6 +173,101 @@ const boxFaces = new THREE.Mesh(unit, new THREE.MeshBasicMaterial({ color: RED, 
 const boxEdges = new THREE.LineSegments(new THREE.EdgesGeometry(unit), new THREE.LineBasicMaterial({ color: RED }));
 box.add(boxFaces, boxEdges);
 robotRoot.add(box);
+
+// ---- room anchor: keeps the robot on the real arm when the headset re-centres ----
+// Taking the headset off and on (or holding the Meta button) moves the WebXR origin to where you now stand and
+// face, so a placement stored in WebXR coordinates slides off the real arm. An anchor is tracked against the
+// real room and stays put. Each frame: anchor pose vs stored placement; if they disagree the origin moved, so
+// the anchor's pose goes to Botswain as the corrected placement (outline AND hand directions follow).
+const ANCHOR_TOL_M = 0.01, ANCHOR_TOL_RAD = 0.02;
+const room = { anchor: null, creating: false, rows: null, correction: null, sentMs: 0, supported: true, reset: false,
+               anchorMs: 0, persisted: false, restored: null, restoreMs: 0 };
+const ANCHOR_KEY = "botswain.vr.anchor";  // the persistent anchor's id: the placement survives leaving VR
+
+async function persistAnchor(anchor) {
+  // Persistent anchors are re-found from the Quest's saved room map (the spatial-data permission), not from
+  // this session's tracking: sturdier across doffing, and they bring the placement back on the next Enter.
+  if (!anchor.requestPersistentHandle) return;
+  try {
+    let old = null;
+    try { old = localStorage.getItem(ANCHOR_KEY); } catch (e) { /* no storage */ }
+    const uuid = await anchor.requestPersistentHandle();
+    try { localStorage.setItem(ANCHOR_KEY, uuid); } catch (e) { /* no storage */ }
+    if (old && old !== uuid && xrSession && xrSession.deletePersistentAnchor) {
+      xrSession.deletePersistentAnchor(old).catch(() => {});  // one saved placement, not a pile of them
+    }
+    note("placement anchor saved to the room map");
+  } catch (e) { report(e); }
+}
+
+function rowsClose(a, b, tol) { return a.every((v, i) => Math.abs(v - b[i]) < tol); }
+
+function dropAnchor() {
+  if (room.anchor && room.anchor.delete) room.anchor.delete();
+  room.anchor = null;
+}
+
+function anchorPlacement(frame, ref, rows) {
+  if (!frame.createAnchor) { room.supported = false; return; }
+  const m = new THREE.Matrix4().set(...rows), pos = new THREE.Vector3(), quat = new THREE.Quaternion();
+  m.decompose(pos, quat, new THREE.Vector3());
+  room.creating = true;
+  frame.createAnchor(new XRRigidTransform({ x: pos.x, y: pos.y, z: pos.z }, { x: quat.x, y: quat.y, z: quat.z, w: quat.w }), ref)
+    .then((anchor) => {
+      room.creating = false;
+      if (room.rows === rows) {
+        dropAnchor(); room.anchor = anchor; room.anchorMs = performance.now(); room.persisted = false;
+      } else if (anchor.delete) anchor.delete();  // stale
+    })
+    .catch((e) => { room.creating = false; room.supported = false; report(e); });
+}
+
+function updateAnchor(frame, ref) {
+  if (!status || placing.held || placing.nudging || placing.preview) return;  // the hand is placing it right now
+  if (room.restored) {  // a saved placement from an earlier session: wait until the Quest has found it
+    const found = frame.getPose(room.restored.anchorSpace, ref);
+    if (found) {
+      room.correction = new THREE.Matrix4().fromArray(found.transform.matrix).transpose().toArray();
+      command({ type: "calib", op: "set", matrix: room.correction });
+      dropAnchor(); room.anchor = room.restored; room.restored = null; room.persisted = true; room.rows = null;
+      note("placement restored from the saved room anchor");
+    } else if (performance.now() - room.restoreMs > 5000) {
+      room.restored = null;
+      command({ type: "calib", op: "reset" });
+      note("saved anchor not found in this room within 5 s: place the robot again");
+    }
+    return;
+  }
+  if (room.anchor && !room.persisted && performance.now() - room.anchorMs > 2000) {  // settled: save it
+    room.persisted = true;
+    persistAnchor(room.anchor);
+  }
+  const rows = status.calib.matrix;
+  if (!rows) { dropAnchor(); room.rows = null; return; }
+  if (!room.rows || !rowsClose(rows, room.rows, 1e-6)) {  // the laptop's placement changed
+    const ours = room.correction && rowsClose(rows, room.correction, 1e-3);
+    room.rows = rows;
+    if (ours) { room.correction = null; return; }  // the echo of our own re-centre correction: same anchor
+    room.reset = false;
+    dropAnchor();
+    anchorPlacement(frame, ref, rows);  // a new placement (drag, slide, X fit): anchor it to the room
+    return;
+  }
+  if (!room.anchor) return;
+  const pose = frame.getPose(room.anchor.anchorSpace, ref);
+  if (!pose) return;  // the anchor isn't tracked this frame (looking away, tracking loss): keep what we have
+  const anchored = new THREE.Matrix4().fromArray(pose.transform.matrix);
+  const stored = new THREE.Matrix4().set(...rows);
+  const moved = anchored.clone().setPosition(0, 0, 0).premultiply(stored.clone().setPosition(0, 0, 0).transpose());
+  const angle = Math.acos(Math.min(1, Math.max(-1, (moved.elements[0] + moved.elements[5] + moved.elements[10] - 1) / 2)));
+  const shift = new THREE.Vector3().setFromMatrixPosition(anchored).distanceTo(new THREE.Vector3().setFromMatrixPosition(stored));
+  if ((shift > ANCHOR_TOL_M || angle > ANCHOR_TOL_RAD) && performance.now() - room.sentMs > 500) {
+    room.correction = anchored.clone().transpose().toArray();  // row-major, like status.calib.matrix
+    room.sentMs = performance.now();
+    command({ type: "calib", op: "set", matrix: room.correction });
+    note(`anchor correction: moved ${(shift * 100).toFixed(1)} cm, turned ${(angle * 180 / Math.PI).toFixed(1)} deg`);
+  }
+}
 
 function applyStatus() {
   const cal = status && status.calib.matrix;
@@ -254,7 +354,7 @@ function bar(c, x, y, w, h, frac, color) {
 
 function frameCard(c, W, H, title, tag) {
   // Panel body, ink border, amber header strip with the title stamped in black.
-  const head = Math.round(H * 0.17);
+  const head = Math.round(Math.min(H * 0.17, 0.17 * W * 0.64));  // header keeps its size on tall cards
   c.fillStyle = "rgba(20,20,19,0.94)"; c.fillRect(0, 0, W, H);
   c.fillStyle = AMBER_CSS; c.fillRect(0, 0, W, head);
   let tagW = 0;
@@ -282,6 +382,9 @@ scene.add(hudHolder);
 function hudState() {
   if (!linked()) return { word: "NO LINK", color: RED_CSS, sub: takenOver ? "another page took over" : "reconnecting" };
   if (placing.held) return { word: "PLACING", color: CYAN_CSS, sub: "line the outline up, let go of the trigger" };
+  if (ui.pressed === "home") return { word: "GOING HOME", color: AMBER_CSS, sub: "let go of the trigger to stop" };
+  if (ui.frozen !== null && !BUTTONS.includes(ui.hover))
+    return { word: "GRIP LOCKED", color: CYAN_CSS, sub: `set the trigger to ${Math.round(ui.frozen * 100)} % to take it back` };
   if (placing.nudging) return { word: "SLIDING", color: CYAN_CSS, sub: "left stick: up = away from you" };
   if (rightWhy) return { word: "HAND LOST", color: RED_CSS, sub: "right hand " + rightWhy };
   if (status.need_release) return { word: "LET GO", color: AMBER_CSS, sub: "release the grip once" };
@@ -292,11 +395,17 @@ function hudState() {
 function drawHud() {
   const st = hudState(), s = status;
   const closed = s && s.grip_cmd !== null ? 1 - s.grip_cmd : null;
-  const calib = !s ? "" : s.calib.matrix || s.calib.note !== "not calibrated" ? s.calib.note
+  const calib = !s ? "" : s.calib.matrix ? s.calib.note + (room.anchor ? " · ANCHORED" : "")
+    : s.calib.note !== "not calibrated" ? s.calib.note
     : "NOT PLACED · HOLD LEFT TRIGGER AT THE TOOL TIP";  // until then directions come from the laptop setting
-  const key = JSON.stringify([st, s && s.mode, s && s.scale, s && s.rotation, closed, calib]);
+  const rec = s && s.rec && s.rec.on ? Math.floor(s.rec.frames / 30) : null;  // whole seconds: repaint once a second
+  const key = JSON.stringify([st, s && s.mode, s && s.scale, s && s.rotation, closed, calib, rec]);
   paint(hud, key, (c, W, H) => {
     const head = frameCard(c, W, H, "BOTSWAIN", "VR · RIGHT HAND DRIVES");
+    if (rec !== null) {  // over the header's tag: impossible to miss while recording
+      c.fillStyle = RED_CSS; c.fillRect(W * 0.5, 6, W * 0.5 - 6, head - 6);
+      text(c, `● REC ${rec} s`, W * 0.5 + 28, head * 0.72, head * 0.55, SANS, "#ffffff", W * 0.5 - 60);
+    }
     if (s) stamp(c, s.mode, W - 28, head + 62, 34, s.mode === "error" || s.mode === "collision" ? RED_CSS
                  : s.mode === "streaming" ? AMBER_CSS : GREEN_CSS);
     text(c, st.word, 28, head + 98, 96, SANS, st.color, W * 0.62);
@@ -327,6 +436,7 @@ alertHolder.add(alertPanel);
 scene.add(alertHolder);
 
 function alertText() {
+  if (room.reset) return "VIEW RE-CENTRED · RE-PLACE THE ROBOT";
   if (!linked()) return takenOver ? "LINK TAKEN BY ANOTHER PAGE" : "LINK LOST · RECONNECTING";
   if (status.fault) return "ROBOT: " + status.fault.toUpperCase();
   if (status.mode === "error" || status.mode === "collision" || status.mode === "disconnected")
@@ -435,12 +545,33 @@ const CONTROLS = [
                      ["lstick", "STICK", "slide robot: fine-tune"],
                      ["y", "HOLD Y", "reset calibration"], ["lgrip", "GRIP", "point at a window, drag it"]]],
 ];
-const controlsCard = card(0.40, 0.47, 1024);
-const controlsWindow = makeWindow("controls", new THREE.Vector3(-0.95, -0.05, -0.55), controlsCard, 0.40, 0.47);
+const controlsCard = card(0.40, 0.64, 1024);
+const controlsWindow = makeWindow("controls", new THREE.Vector3(-0.95, -0.05, -0.55), controlsCard, 0.40, 0.64);
+const BUTTONS = ["home", "box", "record", "discard"];
+const DISCARD_HOLD_MS = 1000;  // throwing an episode away can't be undone: hold, don't click
+const uiRects = {};  // button id -> [x, y, w, h] in canvas pixels, from the last drawControls()
+const ui = { hover: null, pressed: null, frozen: null, lastTrigger: 0, prevDown: false, holdMs: 0, done: false };
 const pressed = new Set();
 
+function drawButton(c, id, x, y, w, h, label, sub, on, ready) {
+  uiRects[id] = [x, y, w, h];
+  const hot = ui.hover === id, held = ui.pressed === id;
+  c.fillStyle = held ? AMBER_CSS : on ? "rgba(255,59,48,0.25)" : "rgba(242,242,238,0.06)";
+  c.fillRect(x, y, w, h);
+  c.lineWidth = hot ? 10 : 5;
+  c.strokeStyle = !ready ? DIM : hot ? CYAN_CSS : on ? RED_CSS : INK;
+  c.strokeRect(x, y, w, h);
+  text(c, label, x + 24, y + h * 0.48, 44, SANS, held ? BLACK : ready ? INK : DIM, w - 48);
+  text(c, sub, x + 24, y + h * 0.82, 26, MONO, held ? BLACK : DIM, w - 48);
+}
+
 function drawControls() {
-  paint(controlsCard, [...pressed].sort().join(","), (c, W, H) => {
+  const boxOn = !!(status && status.box_on), homeReady = !!(status && status.home_ready);
+  const rec = status && status.rec;
+  const holding = ui.pressed === "discard" && !ui.done ? Math.min(1, (performance.now() - ui.holdMs) / DISCARD_HOLD_MS) : 0;
+  const key = [...pressed].sort().join(",") + `|${ui.hover}|${ui.pressed}|${boxOn}|${homeReady}|` +
+              `${rec ? `${rec.on}|${rec.saved}` : "none"}|${holding.toFixed(1)}`;
+  paint(controlsCard, key, (c, W, H) => {
     let y = frameCard(c, W, H, "CONTROLS", "DRAG: LEFT GRIP") + 20;
     for (const [section, rows] of CONTROLS) {
       text(c, section, 28, y + 44, 34, MONO, DIM);
@@ -456,7 +587,80 @@ function drawControls() {
       }
       y += 14;
     }
+    // The two buttons, drawn last (on top of the card): aim the RIGHT controller at one and pull the trigger.
+    text(c, "RIGHT CONTROLLER: AIM + TRIGGER", 28, H - 412, 28, MONO, DIM);
+    const bw = (W - 28 * 3) / 2, by = H - 200, bh = 170;
+    const recReady = !!rec, recOn = !!(rec && rec.on);
+    drawButton(c, "record", 28, by - 190, bw, bh, recOn ? "SAVE EPISODE" : "RECORD",
+               !recReady ? "recording not available" : recOn ? "trigger = stop + save" : `trigger = start · ${rec.saved} saved`,
+               recOn, recReady);
+    drawButton(c, "discard", 28 * 2 + bw, by - 190, bw, bh, "DISCARD", recOn ? "hold 1 s = throw away" : "nothing recording",
+               false, recOn);
+    if (holding > 0) { c.fillStyle = RED_CSS; c.fillRect(28 * 2 + bw, by - 190 + bh - 14, bw * holding, 14); }
+    drawButton(c, "home", 28, by, bw, bh, ui.pressed === "home" ? "GOING HOME" : "HOME",
+               !homeReady ? "home not set in the robot YAML" : ui.pressed === "home" ? "let go = stop" : "hold trigger to go",
+               false, homeReady);
+    drawButton(c, "box", 28 * 2 + bw, by, bw, bh, boxOn ? "SAFETY BOX ON" : "SAFETY BOX OFF", "trigger = switch",
+               boxOn, true);
   });
+}
+
+const uiRaycaster = new THREE.Raycaster();
+const rightRayLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 0, -1)]),
+                                    new THREE.LineBasicMaterial({ color: CYAN }));
+rightRayLine.matrixAutoUpdate = false;
+rightRayLine.visible = false;
+scene.add(rightRayLine);
+
+function uiHover(rayR) {
+  // Which button the right controller points at ("panel" = the controls window, no button), from the hit's uv.
+  rightRayLine.visible = false;
+  if (!rayR || !controlsWindow.visible) return null;
+  uiRaycaster.ray.origin.setFromMatrixPosition(rayR);
+  uiRaycaster.ray.direction.set(0, 0, -1).transformDirection(rayR);
+  const hit = uiRaycaster.intersectObject(controlsCard, false)[0];
+  if (!hit || !hit.uv) return null;
+  rightRayLine.visible = true;
+  rightRayLine.matrix.copy(rayR).multiply(new THREE.Matrix4().makeScale(1, 1, hit.distance));
+  const { width: W, height: H } = controlsCard.userData.canvas;
+  const x = hit.uv.x * W, y = (1 - hit.uv.y) * H;
+  for (const [id, [rx, ry, rw, rh]] of Object.entries(uiRects)) {
+    if (x >= rx && x <= rx + rw && y >= ry && y <= ry + rh) return id;
+  }
+  return "panel";
+}
+
+function updateUi(rightSrc, rayR, right) {
+  // The right trigger is also the gripper. While aiming at a button the gripper keeps the value it had, and
+  // after leaving it takes the trigger back only once the trigger matches that value again (like a motor
+  // fader): clicking a button never squeezes or drops what the gripper holds.
+  const raw = right.tracked ? right.trigger : 0;
+  ui.hover = uiHover(rayR);
+  const onButton = BUTTONS.includes(ui.hover);
+  if (onButton && ui.frozen === null) ui.frozen = ui.lastTrigger;
+  const down = raw > (ui.prevDown ? CLUTCH_OFF : CLUTCH_ON);
+  if (down && !ui.prevDown && onButton) {  // a fresh pull on a button
+    ui.pressed = ui.hover;
+    pulse(rightSrc, 0.6, 30);
+    if (ui.pressed === "home" && status && status.home_ready) command({ type: "ui", action: "home", held: true });
+    if (ui.pressed === "box") command({ type: "ui", action: "box" });
+    if (ui.pressed === "record" && status && status.rec) command({ type: "ui", action: "record" });
+    ui.holdMs = performance.now();
+    ui.done = false;
+  }
+  if (ui.pressed === "discard" && !ui.done && status && status.rec && status.rec.on
+      && performance.now() - ui.holdMs > DISCARD_HOLD_MS) {  // held long enough on DISCARD
+    command({ type: "ui", action: "discard" });
+    pulse(rightSrc, 1.0, 80);
+    ui.done = true;
+  }
+  if (ui.pressed && (!down || ui.hover !== ui.pressed)) {  // let go, or aimed away: HOME stops
+    if (ui.pressed === "home") command({ type: "ui", action: "home", held: false });
+    ui.pressed = null;
+  }
+  ui.prevDown = down;
+  if (ui.frozen !== null && !onButton && !ui.pressed && Math.abs(raw - ui.frozen) < 0.1) ui.frozen = null;
+  if (ui.frozen !== null) right.trigger = ui.frozen; else ui.lastTrigger = raw;
 }
 
 function updateWindows(head, ray, leftGrip) {
@@ -662,6 +866,7 @@ function frameBody(t, frame) {
   const head = view ? { pos: [view.transform.position.x, view.transform.position.y, view.transform.position.z],
                         quat: [view.transform.orientation.x, view.transform.orientation.y,
                                view.transform.orientation.z, view.transform.orientation.w] } : null;
+  updateUi(rightSrc, poseMatrix(frame, rightSrc && rightSrc.targetRaySpace, ref), right);
   send({ type: "vr", right, left, head });
 
   const ray = poseMatrix(frame, leftSrc && leftSrc.targetRaySpace, ref);
@@ -689,17 +894,38 @@ function frameBody(t, frame) {
   alertHolder.visible = warning !== "" && !!view;
   if (warning) drawAlert(warning);
   updateWindows(headPose, ray, left.tracked ? left.grip : 0);
+  updateAnchor(frame, ref);
   applyStatus();
   renderer.render(scene, camera);
 }
 
 async function enter() {
   try {
-    xrSession = await navigator.xr.requestSession(enterBtn.dataset.mode, { requiredFeatures: ["local-floor"] });
+    xrSession = await navigator.xr.requestSession(enterBtn.dataset.mode,
+                                                  { requiredFeatures: ["local-floor"], optionalFeatures: ["anchors"] });
   } catch (e) { say("could not start: " + e.message, "bad"); return; }
   await renderer.xr.setSession(xrSession);
-  command({ type: "calib", op: "reset" });  // a new session has a new room origin: the old fit no longer fits
+  dropAnchor(); room.rows = null; room.correction = null; room.reset = false; room.restored = null;
+  renderer.xr.getReferenceSpace().addEventListener("reset", (e) => {
+    // Re-centred. With an anchor the next frames fix the placement; without one we can only warn.
+    if (!room.anchor && status && status.calib.matrix) room.reset = true;
+    note(`re-centre (reference space reset${e.transform ? ", with transform" : ""}): ` +
+         (room.anchor ? "the anchor will correct it" : "no anchor"));
+  });
+  xrSession.addEventListener("visibilitychange", () => note("headset " + xrSession.visibilityState));
+  let saved = null;
+  try { saved = localStorage.getItem(ANCHOR_KEY); } catch (e) { /* no storage */ }
+  if (saved && xrSession.restorePersistentAnchor) {
+    try {
+      room.restored = await xrSession.restorePersistentAnchor(saved);
+      room.restoreMs = performance.now();
+    } catch (e) { note("could not restore the saved anchor: " + e.message); }
+  }
+  // A new session has a new room origin: without a saved anchor the old placement no longer fits.
+  if (!room.restored) command({ type: "calib", op: "reset" });
   xrSession.addEventListener("end", () => {
+    if (ui.pressed === "home") command({ type: "ui", action: "home", held: false });
+    ui.pressed = null; ui.frozen = null;
     command(released()); clutch = false; xrSession = null; grabbed = null;
     renderer.setAnimationLoop(null);
     say("left VR. Press Enter to go back in.", "ok");

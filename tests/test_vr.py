@@ -395,3 +395,19 @@ def test_page_errors_and_refused_placements_reach_the_log(rig, caplog):
     assert "VR page error: TypeError: x is undefined" in text and "flood" not in text
     assert "VR calibration 'set' refused: robot must stand upright" in text
     assert srv.calibration.matrix is None and srv.bad_messages == 1
+
+
+def test_controls_window_buttons_reach_the_gui_and_home_stops_on_disconnect(rig, caplog):
+    _, _, session, _ = rig
+    calls = []
+    srv = VrServer(session, port=free_port(), host="127.0.0.1", on_ui=lambda a, h: calls.append((a, h)),
+                   home_ready=True)
+    srv._handle(json.dumps({"type": "ui", "action": "home", "held": True}))
+    srv._handle(json.dumps({"type": "ui", "action": "box"}))
+    srv._handle(json.dumps({"type": "ui", "action": "shutdown"}))  # unknown: refused
+    srv._disconnected()  # the page dropped mid-hold
+    assert calls == [("home", True), ("box", True), ("home", False)]
+    assert srv.bad_messages == 1 and srv.status()["home_ready"] is True
+    caplog.set_level("INFO", logger="botswain.teleop.vr")
+    srv._handle(json.dumps({"type": "log", "level": "info", "text": "re-centre (reference space reset)"}))
+    assert "VR page: re-centre" in caplog.text

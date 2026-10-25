@@ -7,5 +7,8 @@ driver: dh_modbus
 port: rs485
 params: {slave: 1, baud: 115200}
 force_range_pct: [20, 100]  # DH manual; PGE-50-26 grips about 15-50 N per jaw over this range
-mass_kg: null  # [ ] fill in from the datasheet: the controller's payload must match for drag and collision
-tcp_offset_mm: null  # [ ] measure the fingertip from the flange, so the safety box protects the fingers
+mass_kg: null  # [ ] WEIGH it (gripper + adapter + fingers). Shown in Settings only for now: the controller's
+               # own payload (DobotStudio) is what drag and collision detection use
+tcp_offset_mm: null  # [ ] measure the fingertip centre from the flange face, [x, y, z] mm in the flange frame.
+                     # Used by the VR overlay (calibration dot). The safety box does NOT use it yet: it
+                     # checks the flange, so teach the box with the fingertips where the walls should be

@@ -208,9 +208,11 @@ class SettingsPage(QWidget):
             form.addWidget(pair[1], row, 2)
             self.box_fields[axis] = pair
         panel.body_layout.addLayout(form)
-        self.box_on = QCheckBox("Enforce the box from the start (it can still be switched in the Robot view)")
+        self.box_on = QCheckBox("Enforce the box (the Robot view and the VR button switch it too; the last choice "
+                                "is kept for the next start)")
         self.box_on.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.box_on.setChecked(self.cfg.limits.box_enabled)
+        self._saved_box_on = self.cfg.limits.box_enabled  # what the lab file says
         panel.body_layout.addWidget(self.box_on)
 
         panel.body_layout.addWidget(set_role(QLabel(
@@ -376,7 +378,19 @@ class SettingsPage(QWidget):
         updates = {"limits": {"box_mm": {a: [lo, hi] for a, (lo, hi) in zip(AXES, box, strict=True)},
                               "box_enabled": self.box_on.isChecked()}}
         if self._save(updates, "safety box", restart_needed=False):
+            self._saved_box_on = self.box_on.isChecked()
             self._apply_box(box, self.box_on.isChecked())
+
+    def remember_box_enabled(self, on: bool) -> None:
+        """The box was switched on or off elsewhere (Robot view chip, VR button): keep that for the next start,
+        and show it here so a later Save does not flip it back."""
+        self.box_on.blockSignals(True)
+        self.box_on.setChecked(on)
+        self.box_on.blockSignals(False)
+        if on == self._saved_box_on:
+            return
+        if self._save({"limits": {"box_enabled": on}}, f"safety box {'ON' if on else 'OFF'}", restart_needed=False):
+            self._saved_box_on = on
 
     def save_box_values(self, box: tuple, enabled: bool) -> None:
         """A box from elsewhere (taught in the Robot view): show it here, then the same validated save."""
